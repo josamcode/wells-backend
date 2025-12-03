@@ -20,6 +20,7 @@ exports.getReports = async (req, res) => {
       submittedBy,
       startDate,
       endDate,
+      search,
     } = req.query;
     const { skip, limit: pageLimit } = paginate(page, limit);
 
@@ -39,6 +40,23 @@ exports.getReports = async (req, res) => {
       query.workDate = {};
       if (startDate) query.workDate.$gte = new Date(startDate);
       if (endDate) query.workDate.$lte = new Date(endDate);
+    }
+
+    // Search functionality - search across multiple fields
+    if (search && search.trim() !== '') {
+      query.$or = [
+        { reportNumber: { $regex: search, $options: 'i' } },
+        { title: { $regex: search, $options: 'i' } },
+        { titleAr: { $regex: search, $options: 'i' } },
+        { description: { $regex: search, $options: 'i' } },
+        { descriptionAr: { $regex: search, $options: 'i' } },
+        { workCompleted: { $regex: search, $options: 'i' } },
+        { workCompletedAr: { $regex: search, $options: 'i' } },
+        { challenges: { $regex: search, $options: 'i' } },
+        { challengesAr: { $regex: search, $options: 'i' } },
+        { nextSteps: { $regex: search, $options: 'i' } },
+        { nextStepsAr: { $regex: search, $options: 'i' } },
+      ];
     }
 
     const reports = await Report.find(query)

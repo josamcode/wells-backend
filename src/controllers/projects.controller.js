@@ -33,11 +33,17 @@ exports.getProjects = async (req, res) => {
     if (country) query.country = country;
     if (contractor) query.contractor = contractor;
     if (projectManager) query.projectManager = projectManager;
-    if (search) {
+    if (search && search.trim() !== '') {
       query.$or = [
         { projectNumber: { $regex: search, $options: 'i' } },
         { projectName: { $regex: search, $options: 'i' } },
         { projectNameAr: { $regex: search, $options: 'i' } },
+        { description: { $regex: search, $options: 'i' } },
+        { descriptionAr: { $regex: search, $options: 'i' } },
+        { country: { $regex: search, $options: 'i' } },
+        { region: { $regex: search, $options: 'i' } },
+        { city: { $regex: search, $options: 'i' } },
+        { notes: { $regex: search, $options: 'i' } },
       ];
     }
 
@@ -303,7 +309,15 @@ exports.getProjectStats = async (req, res) => {
 // Get projects for dropdown (simple list)
 exports.getProjectsList = async (req, res) => {
   try {
-    const projects = await Project.find({ isArchived: false })
+    // Build query based on user role
+    const query = { isArchived: false };
+
+    // Contractors can only see their assigned projects
+    if (req.user.role === ROLES.CONTRACTOR) {
+      query.contractor = req.user._id;
+    }
+
+    const projects = await Project.find(query)
       .select('projectNumber projectName status country')
       .sort({ projectNumber: -1 });
 

@@ -51,7 +51,7 @@ const reportSchema = new mongoose.Schema(
     status: {
       type: String,
       enum: Object.values(REPORT_STATUS),
-      default: REPORT_STATUS.DRAFT,
+      default: REPORT_STATUS.SUBMITTED,
     },
     submittedBy: {
       type: mongoose.Schema.Types.ObjectId,
@@ -115,6 +115,9 @@ const reportSchema = new mongoose.Schema(
       type: String,
     },
     attachments: [attachmentSchema],
+    googleDriveUrl: {
+      type: String,
+    },
     weather: {
       condition: String,
       temperature: Number,
