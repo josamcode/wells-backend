@@ -7,34 +7,86 @@ const { PROJECT_STATUS, REPORT_STATUS, ROLES } = require('../utils/constants');
 // Get dashboard analytics
 exports.getDashboardAnalytics = async (req, res) => {
   try {
+    const user = req.user;
+    const userRole = user.role;
+    const userId = user._id;
+
+    // Build project filter based on user role
+    let projectFilter = {};
+    let reportFilter = {};
+
+    // For Super Admin, Admin, and Viewer, exclude archived projects by default
+    // For Project Managers and Contractors, show all their projects (archived and non-archived)
+    if (userRole === ROLES.SUPER_ADMIN || userRole === ROLES.ADMIN || userRole === ROLES.VIEWER) {
+      projectFilter.isArchived = false;
+    }
+
+    // Filter projects based on role
+    if (userRole === ROLES.PROJECT_MANAGER) {
+      // Project Manager: Only projects where they are the project manager (including archived)
+      projectFilter.projectManager = userId;
+      // Reports for their projects
+      const userProjects = await Project.find({ projectManager: userId }).select('_id');
+      const projectIds = userProjects.map(p => p._id);
+      if (projectIds.length > 0) {
+        reportFilter.project = { $in: projectIds };
+      } else {
+        reportFilter.project = null; // No projects, return empty
+      }
+    } else if (userRole === ROLES.CONTRACTOR) {
+      // Contractor: Only projects where they are the contractor (including archived)
+      projectFilter.contractor = userId;
+      // Reports they submitted or for their projects
+      const userProjects = await Project.find({ contractor: userId }).select('_id');
+      const projectIds = userProjects.map(p => p._id);
+      if (projectIds.length > 0) {
+        reportFilter.$or = [
+          { submittedBy: userId },
+          { project: { $in: projectIds } }
+        ];
+      } else {
+        reportFilter.submittedBy = userId; // Only their own reports
+      }
+    } else if (userRole === ROLES.VIEWER) {
+      // Viewer: Can see all projects and reports (read-only, non-archived only)
+      // isArchived: false already set above
+    } else {
+      // Super Admin and Admin: Show all data (non-archived only)
+      // isArchived: false already set above
+    }
+
     // Projects statistics
-    const totalProjects = await Project.countDocuments({ isArchived: false });
+    const totalProjects = await Project.countDocuments(projectFilter);
     const completedProjects = await Project.countDocuments({
+      ...projectFilter,
       status: PROJECT_STATUS.COMPLETED,
-      isArchived: false,
     });
     const inProgressProjects = await Project.countDocuments({
+      ...projectFilter,
       status: PROJECT_STATUS.IN_PROGRESS,
-      isArchived: false,
     });
 
     // Delayed projects
     const delayedProjects = await Project.countDocuments({
+      ...projectFilter,
       status: { $in: [PROJECT_STATUS.IN_PROGRESS, PROJECT_STATUS.PLANNED] },
       expectedEndDate: { $lt: new Date() },
-      isArchived: false,
     });
 
     // Reports statistics
-    const totalReports = await Report.countDocuments();
+    const totalReports = await Report.countDocuments(reportFilter);
     const pendingReports = await Report.countDocuments({
+      ...reportFilter,
       status: { $in: [REPORT_STATUS.SUBMITTED, REPORT_STATUS.UNDER_REVIEW] },
     });
-    const approvedReports = await Report.countDocuments({ status: REPORT_STATUS.APPROVED });
+    const approvedReports = await Report.countDocuments({
+      ...reportFilter,
+      status: REPORT_STATUS.APPROVED,
+    });
 
     // Projects by country
     const projectsByCountry = await Project.aggregate([
-      { $match: { isArchived: false } },
+      { $match: projectFilter },
       {
         $group: {
           _id: '$country',
@@ -55,6 +107,7 @@ exports.getDashboardAnalytics = async (req, res) => {
     const monthlyCompletions = await Project.aggregate([
       {
         $match: {
+          ...projectFilter,
           status: PROJECT_STATUS.COMPLETED,
           actualEndDate: { $gte: twelveMonthsAgo },
         },
@@ -72,29 +125,45 @@ exports.getDashboardAnalytics = async (req, res) => {
     ]);
 
     // Recent projects
-    const recentProjects = await Project.find({ isArchived: false })
+    const recentProjects = await Project.find(projectFilter)
       .populate('contractor', 'fullName')
+      .populate('projectManager', 'fullName')
       .sort({ createdAt: -1 })
       .limit(5)
       .select('projectNumber projectName status country createdAt');
 
     // Recent reports
-    const recentReports = await Report.find()
+    const recentReportsQuery = Report.find(reportFilter)
       .populate('project', 'projectNumber projectName')
       .populate('submittedBy', 'fullName')
       .sort({ createdAt: -1 })
       .limit(5)
       .select('reportNumber title status submittedAt');
 
-    // Active contractors
-    const activeContractors = await User.countDocuments({
-      role: ROLES.CONTRACTOR,
-      isActive: true,
-    });
+    const recentReports = await recentReportsQuery;
 
-    // Total budget (sum of all projects)
+    // Active contractors (only for super admin and admin)
+    let activeContractors = 0;
+    if (userRole === ROLES.SUPER_ADMIN || userRole === ROLES.ADMIN) {
+      activeContractors = await User.countDocuments({
+        role: ROLES.CONTRACTOR,
+        isActive: true,
+      });
+    } else if (userRole === ROLES.PROJECT_MANAGER) {
+      // Count unique contractors in their projects
+      const contractors = await Project.distinct('contractor', {
+        ...projectFilter,
+        contractor: { $exists: true, $ne: null }
+      });
+      activeContractors = await User.countDocuments({
+        _id: { $in: contractors },
+        isActive: true,
+      });
+    }
+
+    // Total budget (sum of filtered projects)
     const budgetAgg = await Project.aggregate([
-      { $match: { isArchived: false } },
+      { $match: projectFilter },
       {
         $group: {
           _id: null,

@@ -24,17 +24,17 @@ exports.getUsers = async (req, res) => {
     }
 
     // Debug logging in development
-    if (process.env.NODE_ENV === 'development') {
-      const totalUsers = await User.countDocuments({});
-      console.log('🔍 Users Query Debug:', {
-        query,
-        page,
-        limit,
-        skip,
-        totalUsersInDB: totalUsers,
-        queryParams: { role, isActive, search },
-      });
-    }
+    // if (process.env.NODE_ENV === 'development') {
+    //   const totalUsers = await User.countDocuments({});
+    //   console.log('🔍 Users Query Debug:', {
+    //     query,
+    //     page,
+    //     limit,
+    //     skip,
+    //     totalUsersInDB: totalUsers,
+    //     queryParams: { role, isActive, search },
+    //   });
+    // }
 
     const users = await User.find(query)
       .sort({ createdAt: -1 })
@@ -44,13 +44,13 @@ exports.getUsers = async (req, res) => {
     const total = await User.countDocuments(query);
 
     // Debug logging in development
-    if (process.env.NODE_ENV === 'development') {
-      console.log('🔍 Users Query Result:', {
-        found: users.length,
-        total,
-        userRoles: users.map(u => ({ id: u._id, email: u.email, role: u.role })),
-      });
-    }
+    // if (process.env.NODE_ENV === 'development') {
+    //   console.log('🔍 Users Query Result:', {
+    //     found: users.length,
+    //     total,
+    //     userRoles: users.map(u => ({ id: u._id, email: u.email, role: u.role })),
+    //   });
+    // }
 
     return successResponse(res, 200, 'Users retrieved successfully', {
       users: users.map(sanitizeUser),
@@ -83,7 +83,7 @@ exports.getUser = async (req, res) => {
 // Create user
 exports.createUser = async (req, res) => {
   try {
-    const { fullName, email, role, phone, organization, country } = req.body;
+    const { fullName, email, role, phone, organization, country, password } = req.body;
 
     // Check if email already exists
     const existingUser = await User.findOne({ email });
@@ -91,14 +91,14 @@ exports.createUser = async (req, res) => {
       return errorResponse(res, 400, 'Email already exists');
     }
 
-    // Generate temporary password
-    const temporaryPassword = generatePassword();
+    // Use provided password or generate temporary password
+    const userPassword = password || generatePassword();
 
     // Create user
     const user = await User.create({
       fullName,
       email,
-      password: temporaryPassword,
+      password: userPassword,
       role: role || ROLES.VIEWER,
       phone,
       organization,
@@ -106,8 +106,10 @@ exports.createUser = async (req, res) => {
       isActive: true,
     });
 
-    // Send welcome email
-    await emailService.sendWelcomeEmail(user, temporaryPassword);
+    // Send welcome email only if password was auto-generated
+    if (!password) {
+      await emailService.sendWelcomeEmail(user, userPassword);
+    }
 
     return successResponse(res, 201, 'User created successfully', sanitizeUser(user));
   } catch (error) {
@@ -118,7 +120,7 @@ exports.createUser = async (req, res) => {
 // Update user
 exports.updateUser = async (req, res) => {
   try {
-    const { fullName, role, phone, organization, country, isActive } = req.body;
+    const { fullName, role, phone, organization, country, isActive, password } = req.body;
 
     const user = await User.findById(req.params.id);
     if (!user) {
@@ -137,6 +139,11 @@ exports.updateUser = async (req, res) => {
     if (organization !== undefined) user.organization = organization;
     if (country !== undefined) user.country = country;
     if (isActive !== undefined) user.isActive = isActive;
+
+    // Update password if provided
+    if (password && password.trim() !== '') {
+      user.password = password;
+    }
 
     await user.save();
 
@@ -209,6 +216,40 @@ exports.getUsersByRole = async (req, res) => {
       .sort({ fullName: 1 });
 
     return successResponse(res, 200, 'Users retrieved successfully', users);
+  } catch (error) {
+    return errorResponse(res, 500, 'Server error', error.message);
+  }
+};
+
+// Change user password (admin action)
+exports.changePassword = async (req, res) => {
+  try {
+    const { password } = req.body;
+    const { id } = req.params;
+
+    if (!password || password.trim() === '') {
+      return errorResponse(res, 400, 'Password is required');
+    }
+
+    if (password.length < 8) {
+      return errorResponse(res, 400, 'Password must be at least 8 characters');
+    }
+
+    const user = await User.findById(id);
+    if (!user) {
+      return errorResponse(res, 404, 'User not found');
+    }
+
+    // Prevent changing super admin password (except by super admin)
+    if (user.role === ROLES.SUPER_ADMIN && req.user.role !== ROLES.SUPER_ADMIN) {
+      return errorResponse(res, 403, 'Cannot change super admin password');
+    }
+
+    // Update password
+    user.password = password;
+    await user.save();
+
+    return successResponse(res, 200, 'Password changed successfully', sanitizeUser(user));
   } catch (error) {
     return errorResponse(res, 500, 'Server error', error.message);
   }

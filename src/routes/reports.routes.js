@@ -28,7 +28,7 @@ router.get(
 router.get(
   '/:id',
   authenticate,
-  authorize('view_reports', 'view_own_reports'),
+  authorize('view_reports', 'view_own_reports', 'review_reports'),
   reportsController.getReport
 );
 

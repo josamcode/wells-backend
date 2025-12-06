@@ -68,6 +68,7 @@ router.put(
     body('organization').optional().trim(),
     body('country').optional().trim(),
     body('isActive').optional().isBoolean(),
+    body('password').optional().isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
     validate,
   ],
   logAudit('update_user', 'user'),
@@ -90,6 +91,19 @@ router.patch(
   authorize('manage_users'),
   logAudit('toggle_user_status', 'user'),
   usersController.toggleUserStatus
+);
+
+// Change user password
+router.patch(
+  '/:id/change-password',
+  authenticate,
+  authorize('manage_users'),
+  [
+    body('password').trim().isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
+    validate,
+  ],
+  logAudit('change_user_password', 'user'),
+  usersController.changePassword
 );
 
 module.exports = router;

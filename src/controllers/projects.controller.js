@@ -22,17 +22,37 @@ exports.getProjects = async (req, res) => {
     const { skip, limit: pageLimit } = paginate(page, limit);
 
     // Build query based on user role
-    const query = { isArchived: isArchived === 'true' };
+    const query = {};
+
+    // For Super Admin and Admin, apply archive filter if specified
+    // For Project Managers and Contractors, show all their projects (archived and non-archived)
+    if (req.user.role === ROLES.SUPER_ADMIN || req.user.role === ROLES.ADMIN || req.user.role === ROLES.VIEWER) {
+      query.isArchived = isArchived === 'true';
+    }
+    // Project Managers and Contractors see all their projects regardless of archive status
 
     // Contractors can only see their assigned projects
     if (req.user.role === ROLES.CONTRACTOR) {
       query.contractor = req.user._id;
     }
 
+    // Project Managers can only see projects where they are the project manager
+    if (req.user.role === ROLES.PROJECT_MANAGER) {
+      query.projectManager = req.user._id;
+    }
+
     if (status) query.status = status;
     if (country) query.country = country;
-    if (contractor) query.contractor = contractor;
-    if (projectManager) query.projectManager = projectManager;
+
+    // Apply contractor filter only if user is not restricted by role
+    if (contractor && req.user.role !== ROLES.CONTRACTOR) {
+      query.contractor = contractor;
+    }
+
+    // Apply projectManager filter only if user is not restricted by role
+    if (projectManager && req.user.role !== ROLES.PROJECT_MANAGER) {
+      query.projectManager = projectManager;
+    }
     if (search && search.trim() !== '') {
       query.$or = [
         { projectNumber: { $regex: search, $options: 'i' } },
@@ -83,8 +103,12 @@ exports.getProject = async (req, res) => {
       return errorResponse(res, 404, 'Project not found');
     }
 
-    // Check access (contractors can only view their projects)
+    // Check access based on role
     if (req.user.role === ROLES.CONTRACTOR && project.contractor?._id.toString() !== req.user._id.toString()) {
+      return errorResponse(res, 403, 'Access denied');
+    }
+
+    if (req.user.role === ROLES.PROJECT_MANAGER && project.projectManager?._id.toString() !== req.user._id.toString()) {
       return errorResponse(res, 403, 'Access denied');
     }
 

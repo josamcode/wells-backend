@@ -26,40 +26,128 @@ exports.getReports = async (req, res) => {
 
     // Build query based on user role
     const query = {};
+    const andConditions = [];
 
-    // Contractors can only see their own reports
+    // Role-based access control
+    // Contractors can only see their own reports or reports for their projects
     if (req.user.role === ROLES.CONTRACTOR) {
-      query.submittedBy = req.user._id;
+      // Get projects where user is contractor
+      const userProjects = await Project.find({ contractor: req.user._id }).select('_id');
+      const projectIds = userProjects.map(p => p._id);
+
+      andConditions.push({
+        $or: [
+          { submittedBy: req.user._id },
+          { project: { $in: projectIds } }
+        ]
+      });
     }
 
-    if (status) query.status = status;
-    if (project) query.project = project;
-    if (reportType) query.reportType = reportType;
-    if (submittedBy) query.submittedBy = submittedBy;
+    // Project Managers can only see reports for projects where they are the project manager
+    if (req.user.role === ROLES.PROJECT_MANAGER) {
+      // Get projects where user is project manager
+      const userProjects = await Project.find({ projectManager: req.user._id }).select('_id');
+      const projectIds = userProjects.map(p => p._id);
+
+      if (projectIds.length > 0) {
+        andConditions.push({ project: { $in: projectIds } });
+      } else {
+        // No projects assigned, return empty result
+        return successResponse(res, 200, 'Reports retrieved successfully', {
+          reports: [],
+          pagination: {
+            page: parseInt(page),
+            limit: parseInt(limit),
+            total: 0,
+            totalPages: 0,
+          },
+        });
+      }
+    }
+
+    // Apply other filters
+    if (status) {
+      andConditions.push({ status });
+    }
+
+    if (project) {
+      // Validate project filter against role restrictions
+      if (req.user.role === ROLES.PROJECT_MANAGER) {
+        // Check if project is in allowed list (already filtered above)
+        andConditions.push({ project });
+      } else if (req.user.role === ROLES.CONTRACTOR) {
+        // For contractors, validate project is in their allowed projects
+        const userProjects = await Project.find({ contractor: req.user._id }).select('_id');
+        const projectIds = userProjects.map(p => p._id.toString());
+        if (projectIds.includes(project)) {
+          andConditions.push({ project });
+        } else {
+          // Project not in allowed list, return empty
+          return successResponse(res, 200, 'Reports retrieved successfully', {
+            reports: [],
+            pagination: {
+              page: parseInt(page),
+              limit: parseInt(limit),
+              total: 0,
+              totalPages: 0,
+            },
+          });
+        }
+      } else {
+        andConditions.push({ project });
+      }
+    }
+
+    if (reportType) {
+      andConditions.push({ reportType });
+    }
+
+    if (submittedBy) {
+      // For contractors, ensure they can only filter by themselves
+      if (req.user.role === ROLES.CONTRACTOR && submittedBy !== req.user._id.toString()) {
+        return successResponse(res, 200, 'Reports retrieved successfully', {
+          reports: [],
+          pagination: {
+            page: parseInt(page),
+            limit: parseInt(limit),
+            total: 0,
+            totalPages: 0,
+          },
+        });
+      }
+      andConditions.push({ submittedBy });
+    }
+
     if (startDate || endDate) {
-      query.workDate = {};
-      if (startDate) query.workDate.$gte = new Date(startDate);
-      if (endDate) query.workDate.$lte = new Date(endDate);
+      const dateFilter = {};
+      if (startDate) dateFilter.$gte = new Date(startDate);
+      if (endDate) dateFilter.$lte = new Date(endDate);
+      andConditions.push({ workDate: dateFilter });
     }
 
     // Search functionality - search across multiple fields
     if (search && search.trim() !== '') {
-      query.$or = [
-        { reportNumber: { $regex: search, $options: 'i' } },
-        { title: { $regex: search, $options: 'i' } },
-        { titleAr: { $regex: search, $options: 'i' } },
-        { description: { $regex: search, $options: 'i' } },
-        { descriptionAr: { $regex: search, $options: 'i' } },
-        { workCompleted: { $regex: search, $options: 'i' } },
-        { workCompletedAr: { $regex: search, $options: 'i' } },
-        { challenges: { $regex: search, $options: 'i' } },
-        { challengesAr: { $regex: search, $options: 'i' } },
-        { nextSteps: { $regex: search, $options: 'i' } },
-        { nextStepsAr: { $regex: search, $options: 'i' } },
-      ];
+      andConditions.push({
+        $or: [
+          { reportNumber: { $regex: search, $options: 'i' } },
+          { title: { $regex: search, $options: 'i' } },
+          { titleAr: { $regex: search, $options: 'i' } },
+          { description: { $regex: search, $options: 'i' } },
+          { descriptionAr: { $regex: search, $options: 'i' } },
+          { workCompleted: { $regex: search, $options: 'i' } },
+          { workCompletedAr: { $regex: search, $options: 'i' } },
+          { challenges: { $regex: search, $options: 'i' } },
+          { challengesAr: { $regex: search, $options: 'i' } },
+          { nextSteps: { $regex: search, $options: 'i' } },
+          { nextStepsAr: { $regex: search, $options: 'i' } }
+        ]
+      });
     }
 
-    const reports = await Report.find(query)
+    // Build final query
+    const finalQuery = andConditions.length > 1 ? { $and: andConditions } : (andConditions[0] || {});
+
+    const reports = await Report.find(finalQuery)
       .populate('project', 'projectNumber projectName country')
       .populate('submittedBy', 'fullName email')
       .populate('reviewedBy', 'fullName email')
@@ -67,7 +155,7 @@ exports.getReports = async (req, res) => {
       .skip(skip)
       .limit(pageLimit);
 
-    const total = await Report.countDocuments(query);
+    const total = await Report.countDocuments(finalQuery);
 
     return successResponse(res, 200, 'Reports retrieved successfully', {
       reports,
@@ -95,12 +183,24 @@ exports.getReport = async (req, res) => {
       return errorResponse(res, 404, 'Report not found');
     }
 
-    // Check access
-    if (
-      req.user.role === ROLES.CONTRACTOR &&
-      report.submittedBy._id.toString() !== req.user._id.toString()
-    ) {
-      return errorResponse(res, 403, 'Access denied');
+    // Check access based on role
+    if (req.user.role === ROLES.CONTRACTOR) {
+      // Contractors can view reports they submitted or reports for their projects
+      const isSubmittedByUser = report.submittedBy?._id.toString() === req.user._id.toString();
+      const isProjectContractor = report.project?.contractor?.toString() === req.user._id.toString();
+
+      if (!isSubmittedByUser && !isProjectContractor) {
+        return errorResponse(res, 403, 'Access denied');
+      }
+    }
+
+    if (req.user.role === ROLES.PROJECT_MANAGER) {
+      // Project Managers can view reports for projects where they are the project manager
+      const isProjectManager = report.project?.projectManager?.toString() === req.user._id.toString();
+
+      if (!isProjectManager) {
+        return errorResponse(res, 403, 'Access denied');
+      }
     }
 
     return successResponse(res, 200, 'Report retrieved successfully', report);

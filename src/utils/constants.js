@@ -29,9 +29,8 @@ const PERMISSIONS = {
     'export_data',
   ],
   [ROLES.PROJECT_MANAGER]: [
-    'create_project',
-    'edit_project',
     'view_projects',
+    'view_reports',
     'review_reports',
     'approve_reports',
     'view_analytics',
@@ -41,6 +40,7 @@ const PERMISSIONS = {
     'submit_reports',
     'edit_own_reports',
     'view_own_reports',
+    'view_analytics',
   ],
   [ROLES.VIEWER]: [
     'view_projects',
