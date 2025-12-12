@@ -5,6 +5,7 @@ const ROLES = {
   PROJECT_MANAGER: 'project_manager',
   CONTRACTOR: 'contractor',
   VIEWER: 'viewer',
+  CLIENT: 'client',
 };
 
 // Role Permissions Map
@@ -46,6 +47,9 @@ const PERMISSIONS = {
     'view_projects',
     'view_reports',
     'view_analytics',
+  ],
+  [ROLES.CLIENT]: [
+    'view_own_projects',
   ],
 };
 

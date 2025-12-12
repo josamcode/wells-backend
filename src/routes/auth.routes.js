@@ -63,5 +63,15 @@ router.post(
   authController.resetPassword
 );
 
+// Client login (by phone number, no password)
+router.post(
+  '/client-login',
+  [
+    body('phone').trim().notEmpty().withMessage('Phone number is required'),
+    validate,
+  ],
+  authController.clientLogin
+);
+
 module.exports = router;
 

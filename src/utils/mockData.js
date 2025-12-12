@@ -139,9 +139,9 @@ const generateProjects = async (users) => {
       },
       contractor: contractors.length > 0 ? randomElement(contractors)._id : null,
       projectManager: projectManagers.length > 0 ? randomElement(projectManagers)._id : null,
-      donor: {
+      client: {
         name: randomElement(organizations),
-        email: `donor${i}@example.com`,
+        email: `client${i}@example.com`,
         phone: `+1${randomInt(2000000000, 9999999999)}`,
       },
       startDate: status !== PROJECT_STATUS.PLANNED ? startDate : null,

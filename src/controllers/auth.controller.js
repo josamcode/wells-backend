@@ -1,6 +1,8 @@
 const User = require('../models/User');
+const Project = require('../models/Project');
 const { generateToken } = require('../config/jwt');
 const { successResponse, errorResponse, sanitizeUser } = require('../utils/helpers');
+const { ROLES } = require('../utils/constants');
 const emailService = require('../services/email.service');
 const crypto = require('crypto');
 
@@ -144,6 +146,63 @@ exports.resetPassword = async (req, res) => {
     await user.save();
 
     return successResponse(res, 200, 'Password reset successful');
+  } catch (error) {
+    return errorResponse(res, 500, 'Server error', error.message);
+  }
+};
+
+// Client login (by phone number, no password required)
+exports.clientLogin = async (req, res) => {
+  try {
+    const { phone } = req.body;
+
+    if (!phone || !phone.trim()) {
+      return errorResponse(res, 400, 'Phone number is required');
+    }
+
+    // Normalize phone number (remove spaces, dashes, etc.)
+    const normalizedPhone = phone.trim().replace(/[\s\-\(\)]/g, '');
+
+    // Escape special regex characters in the phone number
+    const escapedPhone = normalizedPhone.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    // Find projects with this client phone number
+    // Use exact match or regex with escaped characters
+    const projects = await Project.find({
+      $or: [
+        { 'client.phone': normalizedPhone },
+        { 'client.phone': { $regex: escapedPhone, $options: 'i' } },
+      ],
+      isArchived: false,
+    }).select('_id projectNumber projectName client');
+
+    if (projects.length === 0) {
+      return errorResponse(res, 404, 'No projects found for this phone number');
+    }
+
+    // Get client info from first project
+    const clientInfo = projects[0].client;
+
+    // Create a virtual client user object for token generation
+    // We'll use a special format: client_phone_number
+    const clientUserId = `client_${normalizedPhone}`;
+
+    // Generate token with special client identifier
+    const token = generateToken(clientUserId, { isClient: true, phone: normalizedPhone });
+
+    // Return client data and token
+    return successResponse(res, 200, 'Client login successful', {
+      user: {
+        _id: clientUserId,
+        fullName: clientInfo?.name || 'Client',
+        email: clientInfo?.email || '',
+        phone: normalizedPhone,
+        role: ROLES.CLIENT,
+        isClient: true,
+      },
+      token,
+      projectsCount: projects.length,
+    });
   } catch (error) {
     return errorResponse(res, 500, 'Server error', error.message);
   }

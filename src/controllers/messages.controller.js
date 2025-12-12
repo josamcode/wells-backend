@@ -56,6 +56,14 @@ const getAllowedRecipients = async (user) => {
 // Get all conversations (inbox)
 exports.getConversations = async (req, res) => {
   try {
+    // Clients don't have User records, so they can't have messages
+    if (req.user.isClient) {
+      return successResponse(res, 200, 'Conversations retrieved successfully', {
+        conversations: [],
+        pagination: { page: 1, limit: 20, total: 0, totalPages: 0 },
+      });
+    }
+
     const { page = 1, limit = 20 } = req.query;
     const { skip, limit: pageLimit } = paginate(page, limit);
     const userId = req.user._id;
@@ -196,6 +204,11 @@ exports.getConversationMessages = async (req, res) => {
 // Get allowed recipients for composing a message
 exports.getAllowedRecipients = async (req, res) => {
   try {
+    // Clients don't have User records, so they can't send messages
+    if (req.user.isClient) {
+      return successResponse(res, 200, 'Recipients retrieved successfully', { recipients: [] });
+    }
+
     const allowedRecipients = await getAllowedRecipients(req.user);
     return successResponse(res, 200, 'Recipients retrieved successfully', { recipients: allowedRecipients });
   } catch (error) {
@@ -334,6 +347,11 @@ exports.deleteConversation = async (req, res) => {
 // Get unread message count
 exports.getUnreadCount = async (req, res) => {
   try {
+    // Clients don't have User records, so they can't have messages
+    if (req.user.isClient) {
+      return successResponse(res, 200, 'Unread count retrieved successfully', { count: 0 });
+    }
+
     const userId = req.user._id;
 
     const count = await Message.countDocuments({

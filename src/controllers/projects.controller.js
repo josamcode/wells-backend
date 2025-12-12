@@ -41,6 +41,19 @@ exports.getProjects = async (req, res) => {
       query.projectManager = req.user._id;
     }
 
+    // Clients can only see projects with their phone number
+    if (req.user.role === ROLES.CLIENT && req.clientPhone) {
+      // Normalize phone for comparison (remove spaces, dashes, parentheses)
+      const normalizedPhone = req.clientPhone.replace(/[\s\-\(\)]/g, '');
+      // Escape special regex characters for safe regex matching
+      const escapedPhone = normalizedPhone.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+      // Match phone numbers that contain the normalized phone (case-insensitive)
+      // This handles various formats like "+1234567890", "123-456-7890", etc.
+      query['client.phone'] = { $regex: escapedPhone, $options: 'i' };
+      query.isArchived = false; // Clients only see active projects
+    }
+
     if (status) query.status = status;
     if (country) query.country = country;
 
@@ -53,7 +66,9 @@ exports.getProjects = async (req, res) => {
     if (projectManager && req.user.role !== ROLES.PROJECT_MANAGER) {
       query.projectManager = projectManager;
     }
-    if (search && search.trim() !== '') {
+
+    // Search functionality (only if not a client, as clients have restricted access)
+    if (search && search.trim() !== '' && req.user.role !== ROLES.CLIENT) {
       query.$or = [
         { projectNumber: { $regex: search, $options: 'i' } },
         { projectName: { $regex: search, $options: 'i' } },
@@ -97,7 +112,9 @@ exports.getProject = async (req, res) => {
     const project = await Project.findById(req.params.id)
       .populate('contractor', 'fullName email phone organization')
       .populate('projectManager', 'fullName email phone')
-      .populate('createdBy', 'fullName email');
+      .populate('createdBy', 'fullName email')
+      .populate('reviewedBy', 'fullName email')
+      .populate('evaluation.evaluatedBy', 'fullName email');
 
     if (!project) {
       return errorResponse(res, 404, 'Project not found');
@@ -110,6 +127,16 @@ exports.getProject = async (req, res) => {
 
     if (req.user.role === ROLES.PROJECT_MANAGER && project.projectManager?._id.toString() !== req.user._id.toString()) {
       return errorResponse(res, 403, 'Access denied');
+    }
+
+    // Clients can only access projects with their phone number
+    if (req.user.role === ROLES.CLIENT && req.clientPhone) {
+      const normalizedPhone = req.clientPhone.replace(/[\s\-\(\)]/g, '');
+      const projectPhone = project.client?.phone?.replace(/[\s\-\(\)]/g, '') || '';
+      // Compare normalized phone numbers (case-insensitive)
+      if (projectPhone.toLowerCase() !== normalizedPhone.toLowerCase()) {
+        return errorResponse(res, 403, 'Access denied');
+      }
     }
 
     return successResponse(res, 200, 'Project retrieved successfully', project);
@@ -346,6 +373,80 @@ exports.getProjectsList = async (req, res) => {
       .sort({ projectNumber: -1 });
 
     return successResponse(res, 200, 'Projects list retrieved successfully', projects);
+  } catch (error) {
+    return errorResponse(res, 500, 'Server error', error.message);
+  }
+};
+
+// Review project (Admin only)
+exports.reviewProject = async (req, res) => {
+  try {
+    const { reviewNotes, reviewStatus } = req.body;
+    const projectId = req.params.id;
+
+    const project = await Project.findById(projectId);
+    if (!project) {
+      return errorResponse(res, 404, 'Project not found');
+    }
+
+    // Update review information
+    project.reviewStatus = reviewStatus || 'reviewed';
+    project.reviewedBy = req.user._id;
+    project.reviewedAt = new Date();
+    if (reviewNotes) {
+      project.reviewNotes = reviewNotes.trim();
+    }
+
+    await project.save();
+
+    const updatedProject = await Project.findById(projectId)
+      .populate('reviewedBy', 'fullName email')
+      .populate('contractor', 'fullName email')
+      .populate('projectManager', 'fullName email')
+      .populate('evaluation.evaluatedBy', 'fullName email');
+
+    return successResponse(res, 200, 'Project reviewed successfully', updatedProject);
+  } catch (error) {
+    return errorResponse(res, 500, 'Server error', error.message);
+  }
+};
+
+// Evaluate project (Admin only)
+exports.evaluateProject = async (req, res) => {
+  try {
+    const { overallScore, qualityScore, timelineScore, budgetScore, evaluationNotes } = req.body;
+    const projectId = req.params.id;
+
+    const project = await Project.findById(projectId);
+    if (!project) {
+      return errorResponse(res, 404, 'Project not found');
+    }
+
+    // Initialize evaluation object if it doesn't exist
+    if (!project.evaluation) {
+      project.evaluation = {};
+    }
+
+    // Update evaluation information
+    if (overallScore !== undefined) project.evaluation.overallScore = overallScore;
+    if (qualityScore !== undefined) project.evaluation.qualityScore = qualityScore;
+    if (timelineScore !== undefined) project.evaluation.timelineScore = timelineScore;
+    if (budgetScore !== undefined) project.evaluation.budgetScore = budgetScore;
+    if (evaluationNotes) {
+      project.evaluation.evaluationNotes = evaluationNotes.trim();
+    }
+    project.evaluation.evaluatedBy = req.user._id;
+    project.evaluation.evaluatedAt = new Date();
+
+    await project.save();
+
+    const updatedProject = await Project.findById(projectId)
+      .populate('reviewedBy', 'fullName email')
+      .populate('contractor', 'fullName email')
+      .populate('projectManager', 'fullName email')
+      .populate('evaluation.evaluatedBy', 'fullName email');
+
+    return successResponse(res, 200, 'Project evaluated successfully', updatedProject);
   } catch (error) {
     return errorResponse(res, 500, 'Server error', error.message);
   }

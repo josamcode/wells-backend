@@ -61,7 +61,7 @@ const projectSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
     },
-    donor: {
+    client: {
       name: String,
       email: String,
       phone: String,
@@ -114,6 +114,55 @@ const projectSchema = new mongoose.Schema(
       required: true,
     },
     notes: String,
+    // Review fields
+    reviewStatus: {
+      type: String,
+      enum: ['pending', 'reviewed', 'approved', 'needs_revision'],
+      default: 'pending',
+    },
+    reviewedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    },
+    reviewedAt: {
+      type: Date,
+    },
+    reviewNotes: {
+      type: String,
+    },
+    // Evaluation fields
+    evaluation: {
+      overallScore: {
+        type: Number,
+        min: 0,
+        max: 10,
+      },
+      qualityScore: {
+        type: Number,
+        min: 0,
+        max: 10,
+      },
+      timelineScore: {
+        type: Number,
+        min: 0,
+        max: 10,
+      },
+      budgetScore: {
+        type: Number,
+        min: 0,
+        max: 10,
+      },
+      evaluatedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+      },
+      evaluatedAt: {
+        type: Date,
+      },
+      evaluationNotes: {
+        type: String,
+      },
+    },
   },
   {
     timestamps: true,

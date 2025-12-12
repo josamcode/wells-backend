@@ -11,7 +11,7 @@ const { logAudit } = require('../middlewares/auditLog');
 router.get(
   '/',
   authenticate,
-  authorize('view_projects', 'view_assigned_projects'),
+  authorize('view_projects', 'view_assigned_projects', 'view_own_projects'),
   projectsController.getProjects
 );
 
@@ -30,11 +30,42 @@ router.get(
   projectsController.getProjectsList
 );
 
+// Review project (Admin only) - Must be before /:id route
+router.post(
+  '/:id/review',
+  authenticate,
+  authorize('manage_projects'),
+  [
+    body('reviewStatus').optional().isIn(['pending', 'reviewed', 'approved', 'needs_revision']),
+    body('reviewNotes').optional().trim(),
+    validate,
+  ],
+  logAudit('review_project', 'project'),
+  projectsController.reviewProject
+);
+
+// Evaluate project (Admin only) - Must be before /:id route
+router.post(
+  '/:id/evaluate',
+  authenticate,
+  authorize('manage_projects'),
+  [
+    body('overallScore').optional().isFloat({ min: 0, max: 10 }),
+    body('qualityScore').optional().isFloat({ min: 0, max: 10 }),
+    body('timelineScore').optional().isFloat({ min: 0, max: 10 }),
+    body('budgetScore').optional().isFloat({ min: 0, max: 10 }),
+    body('evaluationNotes').optional().trim(),
+    validate,
+  ],
+  logAudit('evaluate_project', 'project'),
+  projectsController.evaluateProject
+);
+
 // Get single project
 router.get(
   '/:id',
   authenticate,
-  authorize('view_projects', 'view_assigned_projects'),
+  authorize('view_projects', 'view_assigned_projects', 'view_own_projects'),
   projectsController.getProject
 );
 

@@ -1,6 +1,8 @@
 const { verifyToken } = require('../config/jwt');
 const User = require('../models/User');
+const Project = require('../models/Project');
 const { errorResponse } = require('../utils/helpers');
+const { ROLES } = require('../utils/constants');
 
 // Verify JWT token and attach user to request
 const authenticate = async (req, res, next) => {
@@ -18,7 +20,39 @@ const authenticate = async (req, res, next) => {
       return errorResponse(res, 401, 'Invalid or expired token');
     }
 
-    // Find user
+    // Check if this is a client token
+    if (decoded.isClient && decoded.phone) {
+      // For clients, create a virtual user object
+      // Escape special regex characters
+      const escapedPhone = decoded.phone.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+      const projects = await Project.find({
+        $or: [
+          { 'client.phone': decoded.phone },
+          { 'client.phone': { $regex: escapedPhone, $options: 'i' } },
+        ],
+        isArchived: false,
+      }).select('client').limit(1);
+
+      if (projects.length === 0) {
+        return errorResponse(res, 401, 'Client access revoked');
+      }
+
+      const clientInfo = projects[0].client;
+      req.user = {
+        _id: decoded.id,
+        fullName: clientInfo?.name || 'Client',
+        email: clientInfo?.email || '',
+        phone: decoded.phone,
+        role: ROLES.CLIENT,
+        isClient: true,
+        isActive: true,
+      };
+      req.clientPhone = decoded.phone;
+      return next();
+    }
+
+    // Regular user authentication
     const user = await User.findById(decoded.id).select('-password');
     if (!user) {
       return errorResponse(res, 401, 'User not found');
