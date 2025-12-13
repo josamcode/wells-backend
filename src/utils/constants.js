@@ -22,7 +22,6 @@ const PERMISSIONS = {
     'view_audit_logs',
   ],
   [ROLES.ADMIN]: [
-    'manage_users',
     'manage_projects',
     'manage_reports',
     'manage_settings',

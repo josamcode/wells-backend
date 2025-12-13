@@ -3,7 +3,39 @@ const { PERMISSIONS } = require('./constants');
 // Check if user has permission
 const hasPermission = (userRole, requiredPermission) => {
   const rolePermissions = PERMISSIONS[userRole] || [];
-  return rolePermissions.includes('manage_all') || rolePermissions.includes(requiredPermission);
+
+  // Super admin with manage_all has all permissions
+  if (rolePermissions.includes('manage_all')) {
+    return true;
+  }
+
+  // Check exact permission match
+  if (rolePermissions.includes(requiredPermission)) {
+    return true;
+  }
+
+  // Check if manage permission includes the required permission
+  // manage_projects includes: view_projects, create_project, edit_project
+  if (requiredPermission.startsWith('view_projects') ||
+    requiredPermission === 'create_project' ||
+    requiredPermission === 'edit_project') {
+    if (rolePermissions.includes('manage_projects')) {
+      return true;
+    }
+  }
+
+  // manage_reports includes: view_reports, submit_reports, edit_own_reports, review_reports, approve_reports
+  if (requiredPermission.startsWith('view_reports') ||
+    requiredPermission === 'submit_reports' ||
+    requiredPermission === 'edit_own_reports' ||
+    requiredPermission === 'review_reports' ||
+    requiredPermission === 'approve_reports') {
+    if (rolePermissions.includes('manage_reports')) {
+      return true;
+    }
+  }
+
+  return false;
 };
 
 // Format error response
