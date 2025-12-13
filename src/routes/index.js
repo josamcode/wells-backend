@@ -10,6 +10,7 @@ const notificationsRoutes = require('./notifications.routes');
 const analyticsRoutes = require('./analytics.routes');
 const settingsRoutes = require('./settings.routes');
 const messagesRoutes = require('./messages.routes');
+const paymentsRoutes = require('./payments.routes');
 
 // Mount routes
 router.use('/auth', authRoutes);
@@ -20,6 +21,7 @@ router.use('/notifications', notificationsRoutes);
 router.use('/analytics', analyticsRoutes);
 router.use('/settings', settingsRoutes);
 router.use('/messages', messagesRoutes);
+router.use('/payments', paymentsRoutes);
 
 // Health check
 router.get('/health', (req, res) => {

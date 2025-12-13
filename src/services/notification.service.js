@@ -222,6 +222,72 @@ class NotificationService {
       priority: 'high',
     });
   }
+
+  // Helper: Notify about payment request
+  async notifyPaymentRequest(paymentId, recipientId, amount, currency, projectName, projectNumber, projectId) {
+    return await this.create({
+      recipient: recipientId,
+      type: NOTIFICATION_TYPES.PAYMENT_REQUESTED,
+      title: {
+        en: 'New Payment Request',
+        ar: 'طلب دفع جديد',
+      },
+      message: {
+        en: `You have a new payment request of ${amount} ${currency} for project ${projectNumber}: ${projectName}`,
+        ar: `لديك طلب دفع جديد بقيمة ${amount} ${currency} لمشروع ${projectNumber}: ${projectName}`,
+      },
+      relatedEntity: {
+        entityType: 'payment',
+        entityId: paymentId,
+      },
+      actionUrl: `/projects/${projectId}`,
+      priority: 'high',
+    });
+  }
+
+  // Helper: Notify about payment approval
+  async notifyPaymentApproval(paymentId, requesterId, amount, currency, projectName, projectNumber, recipientName, projectId) {
+    return await this.create({
+      recipient: requesterId,
+      type: NOTIFICATION_TYPES.PAYMENT_APPROVED,
+      title: {
+        en: 'Payment Approved',
+        ar: 'تمت الموافقة على الدفع',
+      },
+      message: {
+        en: `${recipientName} has approved the payment request of ${amount} ${currency} for project ${projectNumber}: ${projectName}`,
+        ar: `وافق ${recipientName} على طلب الدفع بقيمة ${amount} ${currency} لمشروع ${projectNumber}: ${projectName}`,
+      },
+      relatedEntity: {
+        entityType: 'payment',
+        entityId: paymentId,
+      },
+      actionUrl: `/projects/${projectId}`,
+      priority: 'medium',
+    });
+  }
+
+  // Helper: Notify about payment rejection
+  async notifyPaymentRejection(paymentId, requesterId, amount, currency, projectName, projectNumber, recipientName, reason, projectId) {
+    return await this.create({
+      recipient: requesterId,
+      type: NOTIFICATION_TYPES.PAYMENT_REJECTED,
+      title: {
+        en: 'Payment Rejected',
+        ar: 'تم رفض الدفع',
+      },
+      message: {
+        en: `${recipientName} has rejected the payment request of ${amount} ${currency} for project ${projectNumber}: ${projectName}. Reason: ${reason || 'No reason provided'}`,
+        ar: `رفض ${recipientName} طلب الدفع بقيمة ${amount} ${currency} لمشروع ${projectNumber}: ${projectName}. السبب: ${reason || 'لم يتم تقديم سبب'}`,
+      },
+      relatedEntity: {
+        entityType: 'payment',
+        entityId: paymentId,
+      },
+      actionUrl: `/projects/${projectId}`,
+      priority: 'high',
+    });
+  }
 }
 
 // Export singleton instance

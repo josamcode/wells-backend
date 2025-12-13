@@ -90,6 +90,9 @@ const NOTIFICATION_TYPES = {
   PROJECT_STATUS_CHANGED: 'project_status_changed',
   USER_ROLE_CHANGED: 'user_role_changed',
   SYSTEM_ALERT: 'system_alert',
+  PAYMENT_REQUESTED: 'payment_requested',
+  PAYMENT_APPROVED: 'payment_approved',
+  PAYMENT_REJECTED: 'payment_rejected',
 };
 
 // Countries (example list - expand as needed)
