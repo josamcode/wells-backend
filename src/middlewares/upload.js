@@ -3,8 +3,11 @@ const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const { errorResponse } = require('../utils/helpers');
 
-// Configure multer for file uploads
-const storage = multer.diskStorage({
+// Memory storage for Cloudinary uploads
+const memoryStorage = multer.memoryStorage();
+
+// Disk storage for temporary file uploads
+const diskStorage = multer.diskStorage({
   destination: function (req, file, cb) {
     cb(null, 'uploads/temp');
   },
@@ -16,8 +19,24 @@ const storage = multer.diskStorage({
 
 // File filter
 const fileFilter = (req, file, cb) => {
-  const allowedTypes = (process.env.ALLOWED_FILE_TYPES || '').split(',');
-  
+  const defaultAllowedTypes = [
+    'image/jpeg',
+    'image/png',
+    'image/jpg',
+    'image/gif',
+    'application/pdf',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  ];
+
+  const envAllowedTypes = process.env.ALLOWED_FILE_TYPES
+    ? process.env.ALLOWED_FILE_TYPES.split(',').map(t => t.trim()).filter(t => t)
+    : [];
+
+  const allowedTypes = envAllowedTypes.length > 0 ? envAllowedTypes : defaultAllowedTypes;
+
   if (allowedTypes.includes(file.mimetype)) {
     cb(null, true);
   } else {
@@ -25,11 +44,20 @@ const fileFilter = (req, file, cb) => {
   }
 };
 
-// Create multer upload instance
+// Create multer upload instance (disk storage - for existing functionality)
 const upload = multer({
-  storage: storage,
+  storage: diskStorage,
   limits: {
     fileSize: (parseInt(process.env.MAX_FILE_SIZE) || 50) * 1024 * 1024, // Convert MB to bytes
+  },
+  fileFilter: fileFilter,
+});
+
+// Memory storage upload for Cloudinary
+const uploadMemory = multer({
+  storage: memoryStorage,
+  limits: {
+    fileSize: (parseInt(process.env.MAX_FILE_SIZE) || 50) * 1024 * 1024,
   },
   fileFilter: fileFilter,
 });
@@ -47,5 +75,4 @@ const handleUploadError = (err, req, res, next) => {
   next();
 };
 
-module.exports = { upload, handleUploadError };
-
+module.exports = { upload, uploadMemory, handleUploadError };

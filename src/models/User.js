@@ -47,6 +47,30 @@ const userSchema = new mongoose.Schema(
     profileImage: {
       type: String,
     },
+    media: [
+      {
+        name: {
+          type: String,
+          required: true,
+          trim: true,
+        },
+        url: {
+          type: String,
+          required: true,
+        },
+        publicId: {
+          type: String,
+          required: true,
+        },
+        fileType: {
+          type: String,
+        },
+        uploadedAt: {
+          type: Date,
+          default: Date.now,
+        },
+      },
+    ],
     language: {
       type: String,
       enum: ['en', 'ar'],

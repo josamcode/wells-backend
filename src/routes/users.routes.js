@@ -6,6 +6,7 @@ const { authenticate } = require('../middlewares/auth');
 const { authorize } = require('../middlewares/rbac');
 const { validate } = require('../middlewares/validation');
 const { logAudit } = require('../middlewares/auditLog');
+const { uploadMemory, handleUploadError } = require('../middlewares/upload');
 
 // Get all users
 router.get(
@@ -104,6 +105,30 @@ router.patch(
   ],
   logAudit('change_user_password', 'user'),
   usersController.changePassword
+);
+
+// Upload user media
+router.post(
+  '/:userId/media',
+  authenticate,
+  authorize('manage_users'),
+  uploadMemory.single('file'),
+  handleUploadError,
+  [
+    body('name').trim().notEmpty().withMessage('Media name is required'),
+    validate,
+  ],
+  logAudit('upload_user_media', 'user'),
+  usersController.uploadMedia
+);
+
+// Delete user media
+router.delete(
+  '/:userId/media/:mediaId',
+  authenticate,
+  authorize('manage_users'),
+  logAudit('delete_user_media', 'user'),
+  usersController.deleteMedia
 );
 
 module.exports = router;

@@ -153,6 +153,11 @@ exports.createProject = async (req, res) => {
       createdBy: req.user._id,
     };
 
+    // Remove projectNumber if it's empty (to trigger auto-generation)
+    if (!projectData.projectNumber || projectData.projectNumber.trim() === '') {
+      delete projectData.projectNumber;
+    }
+
     const project = await Project.create(projectData);
 
     // Create Google Drive folder if configured

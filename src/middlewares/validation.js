@@ -5,7 +5,9 @@ const { errorResponse } = require('../utils/helpers');
 const validate = (req, res, next) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
-    return errorResponse(res, 400, 'Validation failed', errors.array());
+    // Create a detailed error message from all validation errors
+    const errorMessages = errors.array().map(err => err.msg).join(', ');
+    return errorResponse(res, 400, errorMessages || 'Validation failed', errors.array());
   }
   next();
 };

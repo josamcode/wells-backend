@@ -2,6 +2,7 @@ const User = require('../models/User');
 const { successResponse, errorResponse, sanitizeUser, paginate, generatePassword } = require('../utils/helpers');
 const { ROLES } = require('../utils/constants');
 const emailService = require('../services/email.service');
+const cloudinaryService = require('../services/cloudinary.service');
 
 // Get all users with pagination and filters
 exports.getUsers = async (req, res) => {
@@ -83,7 +84,7 @@ exports.getUser = async (req, res) => {
 // Create user
 exports.createUser = async (req, res) => {
   try {
-    const { fullName, email, role, phone, organization, country, password } = req.body;
+    const { fullName, email, role, phone, organization, country, password, media } = req.body;
 
     // Check if email already exists
     const existingUser = await User.findOne({ email });
@@ -95,7 +96,7 @@ exports.createUser = async (req, res) => {
     const userPassword = password || generatePassword();
 
     // Create user
-    const user = await User.create({
+    const userData = {
       fullName,
       email,
       password: userPassword,
@@ -104,7 +105,14 @@ exports.createUser = async (req, res) => {
       organization,
       country,
       isActive: true,
-    });
+    };
+
+    // Add media if provided
+    if (media && Array.isArray(media) && media.length > 0) {
+      userData.media = media;
+    }
+
+    const user = await User.create(userData);
 
     // Send welcome email only if password was auto-generated
     if (!password) {
@@ -120,7 +128,7 @@ exports.createUser = async (req, res) => {
 // Update user
 exports.updateUser = async (req, res) => {
   try {
-    const { fullName, role, phone, organization, country, isActive, password } = req.body;
+    const { fullName, role, phone, organization, country, isActive, password, media } = req.body;
 
     const user = await User.findById(req.params.id);
     if (!user) {
@@ -143,6 +151,11 @@ exports.updateUser = async (req, res) => {
     // Update password if provided
     if (password && password.trim() !== '') {
       user.password = password;
+    }
+
+    // Update media if provided
+    if (media !== undefined) {
+      user.media = media;
     }
 
     await user.save();
@@ -278,6 +291,94 @@ exports.getUserStats = async (req, res) => {
       inactive: total - active,
       byRole: stats,
     });
+  } catch (error) {
+    return errorResponse(res, 500, 'Server error', error.message);
+  }
+};
+
+// Upload user media
+exports.uploadMedia = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { name } = req.body; // Media name/label from form
+
+    if (!req.file) {
+      return errorResponse(res, 400, 'No file uploaded');
+    }
+
+    if (!name || name.trim() === '') {
+      return errorResponse(res, 400, 'Media name is required');
+    }
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return errorResponse(res, 404, 'User not found');
+    }
+
+    // Only allow media upload for contractors and project managers
+    if (![ROLES.CONTRACTOR, ROLES.PROJECT_MANAGER].includes(user.role)) {
+      return errorResponse(res, 400, 'Media upload is only allowed for contractors and project managers');
+    }
+
+    // Upload to Cloudinary
+    const uploadResult = await cloudinaryService.uploadFile(
+      req.file.buffer,
+      req.file.originalname,
+      `users/${userId}/media`
+    );
+
+    // Add media to user
+    const mediaItem = {
+      name: name.trim(),
+      url: uploadResult.secure_url,
+      publicId: uploadResult.public_id,
+      fileType: req.file.mimetype,
+      uploadedAt: new Date(),
+    };
+
+    if (!user.media) {
+      user.media = [];
+    }
+    user.media.push(mediaItem);
+    await user.save();
+
+    return successResponse(res, 200, 'Media uploaded successfully', {
+      media: mediaItem,
+      user: sanitizeUser(user),
+    });
+  } catch (error) {
+    return errorResponse(res, 500, 'Server error', error.message);
+  }
+};
+
+// Delete user media
+exports.deleteMedia = async (req, res) => {
+  try {
+    const { userId, mediaId } = req.params;
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return errorResponse(res, 404, 'User not found');
+    }
+
+    const mediaItem = user.media.id(mediaId);
+    if (!mediaItem) {
+      return errorResponse(res, 404, 'Media not found');
+    }
+
+    // Delete from Cloudinary
+    try {
+      await cloudinaryService.deleteFile(mediaItem.publicId);
+    } catch (cloudinaryError) {
+      console.error('Cloudinary delete error:', cloudinaryError);
+      // Continue with deletion even if Cloudinary delete fails
+    }
+
+    // Remove from user media array
+    user.media.pull(mediaId);
+    await user.save();
+
+    return successResponse(res, 200, 'Media deleted successfully', sanitizeUser(user));
   } catch (error) {
     return errorResponse(res, 500, 'Server error', error.message);
   }
