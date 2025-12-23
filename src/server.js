@@ -30,6 +30,7 @@ if (isProduction) {
 // CORS Configuration - Specific origins, never use "*" in production
 const allowedOrigins = [
   process.env.FRONTEND_URL || 'http://localhost:3000',
+  'https://wells-management.fly.dev',
   'http://localhost:3000',
   'http://localhost:3001',
 ].filter(Boolean);
