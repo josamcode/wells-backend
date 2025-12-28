@@ -12,13 +12,27 @@ class EmailService {
       return;
     }
 
+    // Support both EMAIL_PASSWORD and EMAIL_PASS environment variables
+    const emailPassword = process.env.EMAIL_PASSWORD || process.env.EMAIL_PASS;
+
+    if (!emailPassword) {
+      console.warn('⚠️ Email password not configured. Email service disabled.');
+      return;
+    }
+
     this.transporter = nodemailer.createTransport({
       host: process.env.EMAIL_HOST,
       port: parseInt(process.env.EMAIL_PORT) || 587,
       secure: false, // true for 465, false for other ports
       auth: {
         user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASSWORD,
+        pass: emailPassword,
+      },
+      // Add requireTLS for port 587
+      requireTLS: true,
+      tls: {
+        // Do not fail on invalid certificates
+        rejectUnauthorized: false,
       },
     });
   }
