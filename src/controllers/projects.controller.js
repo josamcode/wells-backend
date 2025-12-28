@@ -110,7 +110,8 @@ exports.getProject = async (req, res) => {
       .populate('createdBy', 'fullName email')
       .populate('reviewedBy', 'fullName email')
       .populate('evaluation.evaluatedBy', 'fullName email')
-      .populate('contract.uploadedBy', 'fullName email');
+      .populate('contract.uploadedBy', 'fullName email')
+      .populate('projectReports.uploadedBy', 'fullName email');
 
     if (!project) {
       return errorResponse(res, 404, 'Project not found');
@@ -200,9 +201,25 @@ exports.updateProject = async (req, res) => {
 
     const oldContractor = project.contractor?.toString();
     const newContractor = req.body.contractor;
+    const oldProjectType = project.projectType;
+    const newProjectType = req.body.projectType;
+
+    // Prepare update object
+    const updateData = { ...req.body };
+
+    // If project type changed, clear old type-specific details
+    if (newProjectType && oldProjectType && oldProjectType !== newProjectType) {
+      if (oldProjectType === 'well') {
+        updateData.wellDetails = null;
+      } else if (oldProjectType === 'mosque') {
+        updateData.mosqueDetails = null;
+      } else if (oldProjectType === 'other') {
+        updateData.otherDetails = null;
+      }
+    }
 
     // Update project
-    Object.assign(project, req.body);
+    Object.assign(project, updateData);
     await project.save();
 
     // Notify if contractor changed
@@ -758,6 +775,224 @@ exports.getContract = async (req, res) => {
       return errorResponse(res, 500, 'Failed to fetch contract file', lastError?.message || 'All download methods failed');
     } catch (error) {
       console.error('Error serving contract:', error);
+      return errorResponse(res, 500, 'Server error', error.message);
+    }
+  } catch (error) {
+    return errorResponse(res, 500, 'Server error', error.message);
+  }
+};
+
+// Upload project report file (Admin only)
+exports.uploadProjectReport = async (req, res) => {
+  try {
+    const { id: projectId } = req.params;
+
+    if (!req.file) {
+      return errorResponse(res, 400, 'No file uploaded');
+    }
+
+    // Only allow PDF and images
+    const allowedTypes = ['application/pdf', 'image/jpeg', 'image/png', 'image/jpg', 'image/gif'];
+    if (!allowedTypes.includes(req.file.mimetype)) {
+      return errorResponse(res, 400, 'Only PDF and image files are allowed');
+    }
+
+    const project = await Project.findById(projectId);
+    if (!project) {
+      return errorResponse(res, 404, 'Project not found');
+    }
+
+    // Upload to Cloudinary with public access
+    const uploadOptions = { access_mode: 'public' };
+    if (req.file.mimetype === 'application/pdf') {
+      uploadOptions.resource_type = 'raw';
+    }
+
+    const uploadResult = await cloudinaryService.uploadFile(
+      req.file.buffer,
+      req.file.originalname,
+      `projects/${projectId}/reports`,
+      uploadOptions
+    );
+
+    // Add report to project reports array
+    const newReport = {
+      url: uploadResult.secure_url,
+      publicId: uploadResult.public_id,
+      fileName: req.file.originalname,
+      fileType: req.file.mimetype,
+      uploadedAt: new Date(),
+      uploadedBy: req.user._id,
+    };
+
+    if (!project.projectReports) {
+      project.projectReports = [];
+    }
+    project.projectReports.push(newReport);
+    await project.save();
+
+    const updatedProject = await Project.findById(projectId)
+      .populate('projectReports.uploadedBy', 'fullName email')
+      .populate('contractor', 'fullName email')
+      .populate('projectManager', 'fullName email');
+
+    return successResponse(res, 200, 'Project report uploaded successfully', updatedProject);
+  } catch (error) {
+    return errorResponse(res, 500, 'Server error', error.message);
+  }
+};
+
+// Delete project report file (Admin only)
+exports.deleteProjectReport = async (req, res) => {
+  try {
+    const { id: projectId, reportId } = req.params;
+
+    const project = await Project.findById(projectId);
+    if (!project) {
+      return errorResponse(res, 404, 'Project not found');
+    }
+
+    if (!project.projectReports || project.projectReports.length === 0) {
+      return errorResponse(res, 404, 'No reports found');
+    }
+
+    const reportIndex = project.projectReports.findIndex(
+      (r) => r._id.toString() === reportId
+    );
+
+    if (reportIndex === -1) {
+      return errorResponse(res, 404, 'Report not found');
+    }
+
+    const report = project.projectReports[reportIndex];
+
+    // Delete from Cloudinary
+    if (report.publicId) {
+      try {
+        await cloudinaryService.deleteFile(report.publicId);
+      } catch (error) {
+        console.error('Error deleting report from Cloudinary:', error);
+      }
+    }
+
+    // Remove report from array
+    project.projectReports.splice(reportIndex, 1);
+    await project.save();
+
+    const updatedProject = await Project.findById(projectId)
+      .populate('projectReports.uploadedBy', 'fullName email')
+      .populate('contractor', 'fullName email')
+      .populate('projectManager', 'fullName email');
+
+    return successResponse(res, 200, 'Project report deleted successfully', updatedProject);
+  } catch (error) {
+    return errorResponse(res, 500, 'Server error', error.message);
+  }
+};
+
+// Get project report file (authenticated access)
+exports.getProjectReport = async (req, res) => {
+  try {
+    const { id: projectId, reportId } = req.params;
+
+    const project = await Project.findById(projectId);
+    if (!project) {
+      return errorResponse(res, 404, 'Project not found');
+    }
+
+    if (!project.projectReports || project.projectReports.length === 0) {
+      return errorResponse(res, 404, 'No reports found');
+    }
+
+    const report = project.projectReports.find(
+      (r) => r._id.toString() === reportId
+    );
+
+    if (!report) {
+      return errorResponse(res, 404, 'Report not found');
+    }
+
+    if (!report.url) {
+      return errorResponse(res, 404, 'Report file not found');
+    }
+
+    // For clients, verify ownership
+    if (req.user.role === ROLES.CLIENT) {
+      if (!req.clientEmail) {
+        return errorResponse(res, 401, 'Client authentication required');
+      }
+      const normalizedEmail = req.clientEmail.toLowerCase();
+      const projectEmail = project.client?.email?.toLowerCase() || '';
+      if (projectEmail !== normalizedEmail) {
+        return errorResponse(res, 403, 'Access denied');
+      }
+    }
+
+    // Serve the file from Cloudinary
+    try {
+      const https = require('https');
+      const http = require('http');
+      const url = require('url');
+      const reportUrl = new URL(report.url);
+      const protocol = reportUrl.protocol === 'https:' ? https : http;
+
+      try {
+        const urlPromise = new Promise((resolve, reject) => {
+          const request = protocol.get(report.url, (cloudinaryRes) => {
+            if (cloudinaryRes.statusCode === 200) {
+              res.setHeader('Content-Type', report.fileType || 'application/pdf');
+              res.setHeader('Content-Disposition', `inline; filename="${report.fileName || 'report.pdf'}"`);
+              res.setHeader('Cache-Control', 'public, max-age=3600');
+              cloudinaryRes.pipe(res);
+              resolve(true);
+            } else {
+              reject(new Error(`HTTP ${cloudinaryRes.statusCode}`));
+            }
+          });
+
+          request.on('error', reject);
+          request.setTimeout(10000, () => {
+            request.destroy();
+            reject(new Error('Request timeout'));
+          });
+        });
+
+        await urlPromise;
+        return;
+      } catch (urlError) {
+        console.log('Direct URL failed, trying Admin API download...');
+      }
+
+      // If direct URL failed, use Admin API
+      if (!report.publicId) {
+        return errorResponse(res, 400, 'Report public ID not found');
+      }
+
+      const isPdf = report.fileType?.includes('pdf');
+      const resourceTypesToTry = isPdf ? ['raw', 'image'] : ['image', 'raw'];
+
+      let lastError;
+      for (const resourceType of resourceTypesToTry) {
+        try {
+          const fileBuffer = await cloudinaryService.downloadFile(report.publicId, {
+            resource_type: resourceType,
+          });
+
+          res.setHeader('Content-Type', report.fileType || 'application/pdf');
+          res.setHeader('Content-Disposition', `inline; filename="${report.fileName || 'report.pdf'}"`);
+          res.setHeader('Cache-Control', 'public, max-age=3600');
+          res.setHeader('Content-Length', fileBuffer.length);
+          res.send(fileBuffer);
+          return;
+        } catch (downloadError) {
+          console.error(`Download as ${resourceType} failed:`, downloadError.message);
+          lastError = downloadError;
+        }
+      }
+
+      return errorResponse(res, 500, 'Failed to fetch report file', lastError?.message || 'All download methods failed');
+    } catch (error) {
+      console.error('Error serving report:', error);
       return errorResponse(res, 500, 'Server error', error.message);
     }
   } catch (error) {

@@ -174,5 +174,32 @@ router.get(
   projectsController.getContract
 );
 
+// Upload project report file (Admin only)
+router.post(
+  '/:id/reports',
+  authenticate,
+  authorize('manage_projects'),
+  uploadMemory.single('file'),
+  logAudit('upload_project_report', 'project'),
+  projectsController.uploadProjectReport
+);
+
+// Delete project report file (Admin only)
+router.delete(
+  '/:id/reports/:reportId',
+  authenticate,
+  authorize('manage_projects'),
+  logAudit('delete_project_report', 'project'),
+  projectsController.deleteProjectReport
+);
+
+// Get project report file (authenticated access)
+router.get(
+  '/:id/reports/:reportId',
+  authenticate,
+  authorize('view_projects', 'view_assigned_projects', 'view_own_projects'),
+  projectsController.getProjectReport
+);
+
 module.exports = router;
 
