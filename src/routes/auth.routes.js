@@ -63,11 +63,22 @@ router.post(
   authController.resetPassword
 );
 
-// Client login (by phone number, no password)
+// Send OTP to client email
+router.post(
+  '/client-send-otp',
+  [
+    body('email').isEmail().withMessage('Valid email is required'),
+    validate,
+  ],
+  authController.clientSendOTP
+);
+
+// Client login (by email and OTP)
 router.post(
   '/client-login',
   [
-    body('phone').trim().notEmpty().withMessage('Phone number is required'),
+    body('email').isEmail().withMessage('Valid email is required'),
+    body('otp').trim().notEmpty().withMessage('OTP is required'),
     validate,
   ],
   authController.clientLogin

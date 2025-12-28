@@ -6,6 +6,7 @@ const { authenticate } = require('../middlewares/auth');
 const { authorize } = require('../middlewares/rbac');
 const { validate } = require('../middlewares/validation');
 const { logAudit } = require('../middlewares/auditLog');
+const { uploadMemory } = require('../middlewares/upload');
 
 // Get all projects
 router.get(
@@ -42,6 +43,18 @@ router.post(
   ],
   logAudit('review_project', 'project'),
   projectsController.reviewProject
+);
+
+// Client evaluation (separate endpoint for clients) - Must be before /:id route
+router.post(
+  '/:id/client-evaluate',
+  authenticate,
+  [
+    body('starRating').isInt({ min: 1, max: 7 }).withMessage('Star rating must be between 1 and 7'),
+    body('notes').optional().trim(),
+    validate,
+  ],
+  projectsController.clientEvaluateProject
 );
 
 // Evaluate project (Admin only) - Must be before /:id route
@@ -132,6 +145,33 @@ router.patch(
   ],
   logAudit('update_project_status', 'project'),
   projectsController.updateProjectStatus
+);
+
+// Upload/Update contract (Admin only)
+router.post(
+  '/:id/contract',
+  authenticate,
+  authorize('manage_projects'),
+  uploadMemory.single('file'),
+  logAudit('upload_contract', 'project'),
+  projectsController.uploadContract
+);
+
+// Delete contract (Admin only)
+router.delete(
+  '/:id/contract',
+  authenticate,
+  authorize('manage_projects'),
+  logAudit('delete_contract', 'project'),
+  projectsController.deleteContract
+);
+
+// Get contract file (authenticated access)
+router.get(
+  '/:id/contract',
+  authenticate,
+  authorize('view_projects', 'view_assigned_projects', 'view_own_projects'),
+  projectsController.getContract
 );
 
 module.exports = router;

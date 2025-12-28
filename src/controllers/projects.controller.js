@@ -5,6 +5,7 @@ const { PROJECT_STATUS, ROLES } = require('../utils/constants');
 const googleDriveService = require('../services/googleDrive.service');
 const notificationService = require('../services/notification.service');
 const emailService = require('../services/email.service');
+const cloudinaryService = require('../services/cloudinary.service');
 
 // Get all projects with pagination and filters
 exports.getProjects = async (req, res) => {
@@ -41,16 +42,10 @@ exports.getProjects = async (req, res) => {
       query.projectManager = req.user._id;
     }
 
-    // Clients can only see projects with their phone number
-    if (req.user.role === ROLES.CLIENT && req.clientPhone) {
-      // Normalize phone for comparison (remove spaces, dashes, parentheses)
-      const normalizedPhone = req.clientPhone.replace(/[\s\-\(\)]/g, '');
-      // Escape special regex characters for safe regex matching
-      const escapedPhone = normalizedPhone.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-      // Match phone numbers that contain the normalized phone (case-insensitive)
-      // This handles various formats like "+1234567890", "123-456-7890", etc.
-      query['client.phone'] = { $regex: escapedPhone, $options: 'i' };
+    // Clients can only see projects with their email
+    if (req.user.role === ROLES.CLIENT && req.clientEmail) {
+      const normalizedEmail = req.clientEmail.toLowerCase();
+      query['client.email'] = { $regex: new RegExp(`^${normalizedEmail.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') };
       query.isArchived = false; // Clients only see active projects
     }
 
@@ -114,7 +109,8 @@ exports.getProject = async (req, res) => {
       .populate('projectManager', 'fullName email phone')
       .populate('createdBy', 'fullName email')
       .populate('reviewedBy', 'fullName email')
-      .populate('evaluation.evaluatedBy', 'fullName email');
+      .populate('evaluation.evaluatedBy', 'fullName email')
+      .populate('contract.uploadedBy', 'fullName email');
 
     if (!project) {
       return errorResponse(res, 404, 'Project not found');
@@ -129,12 +125,12 @@ exports.getProject = async (req, res) => {
       return errorResponse(res, 403, 'Access denied');
     }
 
-    // Clients can only access projects with their phone number
-    if (req.user.role === ROLES.CLIENT && req.clientPhone) {
-      const normalizedPhone = req.clientPhone.replace(/[\s\-\(\)]/g, '');
-      const projectPhone = project.client?.phone?.replace(/[\s\-\(\)]/g, '') || '';
-      // Compare normalized phone numbers (case-insensitive)
-      if (projectPhone.toLowerCase() !== normalizedPhone.toLowerCase()) {
+    // Clients can only access projects with their email
+    if (req.user.role === ROLES.CLIENT && req.clientEmail) {
+      const normalizedEmail = req.clientEmail.toLowerCase();
+      const projectEmail = project.client?.email?.toLowerCase() || '';
+      // Compare normalized emails (case-insensitive)
+      if (projectEmail !== normalizedEmail) {
         return errorResponse(res, 403, 'Access denied');
       }
     }
@@ -416,7 +412,7 @@ exports.reviewProject = async (req, res) => {
   }
 };
 
-// Evaluate project (Admin only)
+// Evaluate project (Admin/Staff only - not for clients)
 exports.evaluateProject = async (req, res) => {
   try {
     const { overallScore, qualityScore, timelineScore, budgetScore, evaluationNotes } = req.body;
@@ -425,6 +421,11 @@ exports.evaluateProject = async (req, res) => {
     const project = await Project.findById(projectId);
     if (!project) {
       return errorResponse(res, 404, 'Project not found');
+    }
+
+    // Only admins and staff can use this endpoint
+    if (req.user.role === ROLES.CLIENT) {
+      return errorResponse(res, 403, 'Clients should use the client evaluation endpoint');
     }
 
     // Initialize evaluation object if it doesn't exist
@@ -440,6 +441,7 @@ exports.evaluateProject = async (req, res) => {
     if (evaluationNotes) {
       project.evaluation.evaluationNotes = evaluationNotes.trim();
     }
+
     project.evaluation.evaluatedBy = req.user._id;
     project.evaluation.evaluatedAt = new Date();
 
@@ -452,6 +454,312 @@ exports.evaluateProject = async (req, res) => {
       .populate('evaluation.evaluatedBy', 'fullName email');
 
     return successResponse(res, 200, 'Project evaluated successfully', updatedProject);
+  } catch (error) {
+    return errorResponse(res, 500, 'Server error', error.message);
+  }
+};
+
+// Client evaluation (separate endpoint for clients with 7-star rating)
+exports.clientEvaluateProject = async (req, res) => {
+  try {
+    const { starRating, notes } = req.body;
+    const projectId = req.params.id;
+
+    // Only clients can use this endpoint
+    if (req.user.role !== ROLES.CLIENT) {
+      return errorResponse(res, 403, 'This endpoint is only for clients');
+    }
+
+    if (!req.clientEmail) {
+      return errorResponse(res, 401, 'Client authentication required');
+    }
+
+    const project = await Project.findById(projectId);
+    if (!project) {
+      return errorResponse(res, 404, 'Project not found');
+    }
+
+    // Verify client ownership
+    const normalizedEmail = req.clientEmail.toLowerCase();
+    const projectEmail = project.client?.email?.toLowerCase() || '';
+    if (projectEmail !== normalizedEmail) {
+      return errorResponse(res, 403, 'Access denied. You can only evaluate your own projects.');
+    }
+
+    // Validate star rating
+    if (!starRating || starRating < 1 || starRating > 7) {
+      return errorResponse(res, 400, 'Star rating must be between 1 and 7');
+    }
+
+    // Update client evaluation
+    project.clientEvaluation = {
+      starRating: parseInt(starRating),
+      notes: notes ? notes.trim() : '',
+      evaluatedAt: new Date(),
+    };
+
+    await project.save();
+
+    const updatedProject = await Project.findById(projectId)
+      .populate('reviewedBy', 'fullName email')
+      .populate('contractor', 'fullName email')
+      .populate('projectManager', 'fullName email')
+      .populate('evaluation.evaluatedBy', 'fullName email');
+
+    return successResponse(res, 200, 'Project evaluated successfully', updatedProject);
+  } catch (error) {
+    return errorResponse(res, 500, 'Server error', error.message);
+  }
+};
+
+// Upload/Update contract (Admin only)
+exports.uploadContract = async (req, res) => {
+  try {
+    const { id: projectId } = req.params;
+
+    if (!req.file) {
+      return errorResponse(res, 400, 'No file uploaded');
+    }
+
+    // Only allow PDF and images
+    const allowedTypes = ['application/pdf', 'image/jpeg', 'image/png', 'image/jpg', 'image/gif'];
+    if (!allowedTypes.includes(req.file.mimetype)) {
+      return errorResponse(res, 400, 'Only PDF and image files are allowed');
+    }
+
+    const project = await Project.findById(projectId);
+    if (!project) {
+      return errorResponse(res, 404, 'Project not found');
+    }
+
+    // Delete old contract if exists
+    if (project.contract?.publicId) {
+      try {
+        await cloudinaryService.deleteFile(project.contract.publicId);
+      } catch (error) {
+        console.error('Error deleting old contract:', error);
+      }
+    }
+
+    // Upload to Cloudinary with public access
+    // For PDFs, explicitly set resource_type to 'raw'
+    const uploadOptions = { access_mode: 'public' };
+    if (req.file.mimetype === 'application/pdf') {
+      uploadOptions.resource_type = 'raw';
+    }
+
+    const uploadResult = await cloudinaryService.uploadFile(
+      req.file.buffer,
+      req.file.originalname,
+      `projects/${projectId}/contracts`,
+      uploadOptions
+    );
+
+    // Update project contract
+    project.contract = {
+      url: uploadResult.secure_url,
+      publicId: uploadResult.public_id,
+      fileName: req.file.originalname,
+      fileType: req.file.mimetype,
+      uploadedAt: new Date(),
+      uploadedBy: req.user._id,
+    };
+
+    await project.save();
+
+    const updatedProject = await Project.findById(projectId)
+      .populate('contract.uploadedBy', 'fullName email')
+      .populate('contractor', 'fullName email')
+      .populate('projectManager', 'fullName email');
+
+    return successResponse(res, 200, 'Contract uploaded successfully', updatedProject);
+  } catch (error) {
+    return errorResponse(res, 500, 'Server error', error.message);
+  }
+};
+
+// Delete contract (Admin only)
+exports.deleteContract = async (req, res) => {
+  try {
+    const { id: projectId } = req.params;
+
+    const project = await Project.findById(projectId);
+    if (!project) {
+      return errorResponse(res, 404, 'Project not found');
+    }
+
+    if (!project.contract?.publicId) {
+      return errorResponse(res, 404, 'No contract found');
+    }
+
+    // Delete from Cloudinary
+    try {
+      await cloudinaryService.deleteFile(project.contract.publicId);
+    } catch (error) {
+      console.error('Error deleting contract from Cloudinary:', error);
+    }
+
+    // Remove contract from project
+    project.contract = undefined;
+    await project.save();
+
+    const updatedProject = await Project.findById(projectId)
+      .populate('contractor', 'fullName email')
+      .populate('projectManager', 'fullName email');
+
+    return successResponse(res, 200, 'Contract deleted successfully', updatedProject);
+  } catch (error) {
+    return errorResponse(res, 500, 'Server error', error.message);
+  }
+};
+
+// Get contract file (proxy through backend for secure access)
+exports.getContract = async (req, res) => {
+  try {
+    const { id: projectId } = req.params;
+
+    const project = await Project.findById(projectId);
+    if (!project) {
+      return errorResponse(res, 404, 'Project not found');
+    }
+
+    if (!project.contract?.url) {
+      return errorResponse(res, 404, 'No contract found');
+    }
+
+    // For clients, verify ownership
+    if (req.user.role === ROLES.CLIENT) {
+      if (!req.clientEmail) {
+        return errorResponse(res, 401, 'Client authentication required');
+      }
+      const normalizedEmail = req.clientEmail.toLowerCase();
+      const projectEmail = project.client?.email?.toLowerCase() || '';
+      if (projectEmail !== normalizedEmail) {
+        return errorResponse(res, 403, 'Access denied');
+      }
+    }
+
+    // Serve the file from Cloudinary
+    try {
+      // First, try using the original URL stored during upload
+      // This is the most reliable method since it's the URL Cloudinary generated
+      if (project.contract.url) {
+        const https = require('https');
+        const http = require('http');
+        const url = require('url');
+        const contractUrl = new URL(project.contract.url);
+        const protocol = contractUrl.protocol === 'https:' ? https : http;
+
+        // Try the original URL first (works for images and properly stored PDFs)
+        try {
+          const originalUrlPromise = new Promise((resolve, reject) => {
+            const request = protocol.get(project.contract.url, (cloudinaryRes) => {
+              if (cloudinaryRes.statusCode === 200) {
+                // Set appropriate headers
+                res.setHeader('Content-Type', project.contract.fileType || 'application/pdf');
+                res.setHeader('Content-Disposition', `inline; filename="${project.contract.fileName || 'contract.pdf'}"`);
+                res.setHeader('Cache-Control', 'public, max-age=3600');
+
+                // Pipe the response directly
+                cloudinaryRes.pipe(res);
+                resolve(true);
+              } else {
+                reject(new Error(`HTTP ${cloudinaryRes.statusCode}`));
+              }
+            });
+
+            request.on('error', reject);
+            request.setTimeout(10000, () => {
+              request.destroy();
+              reject(new Error('Request timeout'));
+            });
+          });
+
+          await originalUrlPromise;
+          return; // Success, file served
+        } catch (originalError) {
+          console.log('Original URL failed:', originalError.message);
+
+          // For PDFs, try URL variations
+          if (project.contract.fileType?.includes('pdf')) {
+            const urlVariations = [
+              project.contract.url.replace(/\.(jpg|jpeg|png|gif|webp)$/i, '.pdf'),
+              project.contract.url.replace(/\.[^.]+$/, '.pdf'),
+            ].filter(url => url !== project.contract.url); // Only try variations
+
+            for (const urlVariation of urlVariations) {
+              try {
+                const variationPromise = new Promise((resolve, reject) => {
+                  const request = protocol.get(urlVariation, (cloudinaryRes) => {
+                    if (cloudinaryRes.statusCode === 200) {
+                      res.setHeader('Content-Type', project.contract.fileType || 'application/pdf');
+                      res.setHeader('Content-Disposition', `inline; filename="${project.contract.fileName || 'contract.pdf'}"`);
+                      res.setHeader('Cache-Control', 'public, max-age=3600');
+                      cloudinaryRes.pipe(res);
+                      resolve(true);
+                    } else {
+                      reject(new Error(`HTTP ${cloudinaryRes.statusCode}`));
+                    }
+                  });
+                  request.on('error', reject);
+                  request.setTimeout(10000, () => {
+                    request.destroy();
+                    reject(new Error('Request timeout'));
+                  });
+                });
+                await variationPromise;
+                return; // Success
+              } catch (variationError) {
+                console.log(`URL variation failed: ${variationError.message}`);
+              }
+            }
+          }
+
+          console.log('All original URL attempts failed, trying Admin API download...');
+        }
+      }
+
+      // If original URL failed or doesn't exist, use Admin API
+      if (!project.contract.publicId) {
+        return errorResponse(res, 400, 'Contract public ID not found');
+      }
+
+      // Determine resource type - PDFs might be stored as 'image' or 'raw'
+      const isPdf = project.contract.fileType?.includes('pdf');
+
+      // Try both resource types for PDFs (they might be stored as either)
+      const resourceTypesToTry = isPdf ? ['raw', 'image'] : ['image', 'raw'];
+
+      let lastError;
+      for (const resourceType of resourceTypesToTry) {
+        try {
+          console.log(`Trying to download contract as ${resourceType} type...`);
+          const fileBuffer = await cloudinaryService.downloadFile(project.contract.publicId, {
+            resource_type: resourceType,
+          });
+
+          // Set appropriate headers
+          res.setHeader('Content-Type', project.contract.fileType || 'application/pdf');
+          res.setHeader('Content-Disposition', `inline; filename="${project.contract.fileName || 'contract.pdf'}"`);
+          res.setHeader('Cache-Control', 'public, max-age=3600');
+          res.setHeader('Content-Length', fileBuffer.length);
+
+          // Send the file buffer
+          res.send(fileBuffer);
+          return; // Success, exit
+        } catch (downloadError) {
+          console.error(`Download as ${resourceType} failed:`, downloadError.message);
+          lastError = downloadError;
+          // Continue to next resource type
+        }
+      }
+
+      // If all resource types failed, return error
+      return errorResponse(res, 500, 'Failed to fetch contract file', lastError?.message || 'All download methods failed');
+    } catch (error) {
+      console.error('Error serving contract:', error);
+      return errorResponse(res, 500, 'Server error', error.message);
+    }
   } catch (error) {
     return errorResponse(res, 500, 'Server error', error.message);
   }

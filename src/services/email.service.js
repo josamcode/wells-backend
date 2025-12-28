@@ -169,6 +169,26 @@ class EmailService {
 
     return await this.sendEmail(contractor.email, subject, html);
   }
+
+  // Send OTP email for client login
+  async sendClientOTPEmail(email, otp, clientName = 'Client') {
+    const subject = 'Your Login Verification Code';
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2>Login Verification Code</h2>
+        <p>Hello ${clientName},</p>
+        <p>You requested to login to your client account. Use the verification code below:</p>
+        <div style="background: #f5f5f5; padding: 20px; border-radius: 5px; margin: 20px 0; text-align: center;">
+          <h1 style="font-size: 32px; letter-spacing: 8px; color: #2563eb; margin: 0;">${otp}</h1>
+        </div>
+        <p style="color: #666; font-size: 14px;">This code will expire in 10 minutes.</p>
+        <p style="color: #666; font-size: 14px;">If you didn't request this code, please ignore this email.</p>
+        <p>Best regards,<br>Wells Management Team</p>
+      </div>
+    `;
+
+    return await this.sendEmail(email, subject, html);
+  }
 }
 
 // Export singleton instance

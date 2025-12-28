@@ -98,6 +98,17 @@ const projectSchema = new mongoose.Schema(
     googleDriveFolderUrl: {
       type: String,
     },
+    contract: {
+      url: String,
+      publicId: String,
+      fileName: String,
+      fileType: String,
+      uploadedAt: Date,
+      uploadedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+      },
+    },
     tags: [String],
     priority: {
       type: String,
@@ -161,6 +172,20 @@ const projectSchema = new mongoose.Schema(
       },
       evaluationNotes: {
         type: String,
+      },
+    },
+    // Client evaluation fields (separate from admin evaluation)
+    clientEvaluation: {
+      starRating: {
+        type: Number,
+        min: 1,
+        max: 7,
+      },
+      notes: {
+        type: String,
+      },
+      evaluatedAt: {
+        type: Date,
       },
     },
   },

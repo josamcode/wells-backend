@@ -1,5 +1,6 @@
 const User = require('../models/User');
 const Project = require('../models/Project');
+const OTP = require('../models/OTP');
 const { generateToken } = require('../config/jwt');
 const { successResponse, errorResponse, sanitizeUser } = require('../utils/helpers');
 const { ROLES } = require('../utils/constants');
@@ -151,52 +152,116 @@ exports.resetPassword = async (req, res) => {
   }
 };
 
-// Client login (by phone number, no password required)
-exports.clientLogin = async (req, res) => {
+// Send OTP to client email
+exports.clientSendOTP = async (req, res) => {
   try {
-    const { phone } = req.body;
+    const { email } = req.body;
 
-    if (!phone || !phone.trim()) {
-      return errorResponse(res, 400, 'Phone number is required');
+    if (!email || !email.trim()) {
+      return errorResponse(res, 400, 'Email is required');
     }
 
-    // Normalize phone number (remove spaces, dashes, etc.)
-    const normalizedPhone = phone.trim().replace(/[\s\-\(\)]/g, '');
+    const normalizedEmail = email.trim().toLowerCase();
 
-    // Escape special regex characters in the phone number
-    const escapedPhone = normalizedPhone.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-    // Find projects with this client phone number
-    // Use exact match or regex with escaped characters
+    // Find projects with this client email
     const projects = await Project.find({
-      $or: [
-        { 'client.phone': normalizedPhone },
-        { 'client.phone': { $regex: escapedPhone, $options: 'i' } },
-      ],
+      'client.email': { $regex: new RegExp(`^${normalizedEmail.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
+      isArchived: false,
+    }).select('_id projectNumber projectName client').limit(1);
+
+    if (projects.length === 0) {
+      return errorResponse(res, 404, 'No projects found for this email address');
+    }
+
+    // Get client info
+    const clientInfo = projects[0].client;
+
+    // Generate OTP
+    const otp = OTP.generateOTP();
+
+    // Set expiration (10 minutes)
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+    // Delete any existing OTPs for this email
+    await OTP.deleteMany({ email: normalizedEmail });
+
+    // Save new OTP
+    await OTP.create({
+      email: normalizedEmail,
+      otp,
+      expiresAt,
+    });
+
+    // Send OTP email
+    await emailService.sendClientOTPEmail(normalizedEmail, otp, clientInfo?.name || 'Client');
+
+    return successResponse(res, 200, 'OTP has been sent to your email');
+  } catch (error) {
+    console.error('Error sending OTP:', error);
+    return errorResponse(res, 500, 'Server error', error.message);
+  }
+};
+
+// Client login (by email and OTP)
+exports.clientLogin = async (req, res) => {
+  try {
+    const { email, otp } = req.body;
+
+    if (!email || !email.trim()) {
+      return errorResponse(res, 400, 'Email is required');
+    }
+
+    if (!otp || !otp.trim()) {
+      return errorResponse(res, 400, 'OTP is required');
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+
+    // Find OTP record
+    const otpRecord = await OTP.findOne({ email: normalizedEmail }).sort({ createdAt: -1 });
+
+    if (!otpRecord) {
+      return errorResponse(res, 400, 'OTP not found. Please request a new OTP.');
+    }
+
+    // Verify OTP
+    const verification = otpRecord.verify(otp.trim());
+    await otpRecord.save(); // Save updated attempts
+
+    if (!verification.valid) {
+      return errorResponse(res, 400, verification.error || 'Invalid OTP');
+    }
+
+    // Find projects with this client email
+    const projects = await Project.find({
+      'client.email': { $regex: new RegExp(`^${normalizedEmail.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
       isArchived: false,
     }).select('_id projectNumber projectName client');
 
     if (projects.length === 0) {
-      return errorResponse(res, 404, 'No projects found for this phone number');
+      return errorResponse(res, 404, 'No projects found for this email');
     }
 
     // Get client info from first project
     const clientInfo = projects[0].client;
 
+    // Delete used OTP
+    await OTP.deleteOne({ _id: otpRecord._id });
+
     // Create a virtual client user object for token generation
-    // We'll use a special format: client_phone_number
-    const clientUserId = `client_${normalizedPhone}`;
+    // We'll use a special format: client_email
+    const clientUserId = `client_${normalizedEmail}`;
 
     // Generate token with special client identifier
-    const token = generateToken(clientUserId, { isClient: true, phone: normalizedPhone });
+    const token = generateToken(clientUserId, { isClient: true, email: normalizedEmail });
 
     // Return client data and token
     return successResponse(res, 200, 'Client login successful', {
       user: {
         _id: clientUserId,
         fullName: clientInfo?.name || 'Client',
-        email: clientInfo?.email || '',
-        phone: normalizedPhone,
+        email: normalizedEmail,
+        phone: clientInfo?.phone || '',
         role: ROLES.CLIENT,
         isClient: true,
       },

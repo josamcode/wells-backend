@@ -21,16 +21,12 @@ const authenticate = async (req, res, next) => {
     }
 
     // Check if this is a client token
-    if (decoded.isClient && decoded.phone) {
+    if (decoded.isClient && decoded.email) {
       // For clients, create a virtual user object
-      // Escape special regex characters
-      const escapedPhone = decoded.phone.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const normalizedEmail = decoded.email.toLowerCase();
 
       const projects = await Project.find({
-        $or: [
-          { 'client.phone': decoded.phone },
-          { 'client.phone': { $regex: escapedPhone, $options: 'i' } },
-        ],
+        'client.email': { $regex: new RegExp(`^${normalizedEmail.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
         isArchived: false,
       }).select('client').limit(1);
 
@@ -42,13 +38,13 @@ const authenticate = async (req, res, next) => {
       req.user = {
         _id: decoded.id,
         fullName: clientInfo?.name || 'Client',
-        email: clientInfo?.email || '',
-        phone: decoded.phone,
+        email: normalizedEmail,
+        phone: clientInfo?.phone || '',
         role: ROLES.CLIENT,
         isClient: true,
         isActive: true,
       };
-      req.clientPhone = decoded.phone;
+      req.clientEmail = normalizedEmail;
       return next();
     }
 
