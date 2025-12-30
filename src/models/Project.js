@@ -10,7 +10,7 @@ const projectSchema = new mongoose.Schema(
     },
     projectType: {
       type: String,
-      enum: ['well', 'mosque', 'other'],
+      enum: ['well', 'mosque', 'other', 'educational_center'],
       default: 'well',
     },
     projectName: {
@@ -102,8 +102,22 @@ const projectSchema = new mongoose.Schema(
       ablutionFacilities: Number,
       parkingSpaces: Number,
     },
+    educationalCenterDetails: {
+      area: Number, // square meters
+      totalCapacity: Number, // total number of students
+      classrooms: Number,
+      laboratories: Number,
+      library: Boolean,
+      computerLabs: Number,
+      playground: Boolean,
+      parkingSpaces: Number,
+      administrativeOffices: Number,
+    },
     otherDetails: {
       type: mongoose.Schema.Types.Mixed, // For flexible JSON structure
+    },
+    customDetails: {
+      type: mongoose.Schema.Types.Mixed, // Custom details for any project type
     },
     beneficiaries: {
       estimatedFamilies: Number,

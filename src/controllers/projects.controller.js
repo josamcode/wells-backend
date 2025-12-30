@@ -17,6 +17,7 @@ exports.getProjects = async (req, res) => {
       country,
       contractor,
       projectManager,
+      projectType,
       search,
       isArchived = 'false',
     } = req.query;
@@ -51,6 +52,9 @@ exports.getProjects = async (req, res) => {
 
     if (status) query.status = status;
     if (country) query.country = country;
+    if (projectType && projectType.trim() !== '') {
+      query.projectType = projectType.trim();
+    }
 
     // Apply contractor filter only if user is not restricted by role
     if (contractor && req.user.role !== ROLES.CONTRACTOR) {
@@ -75,6 +79,11 @@ exports.getProjects = async (req, res) => {
         { city: { $regex: search, $options: 'i' } },
         { notes: { $regex: search, $options: 'i' } },
       ];
+    }
+
+    // Debug: Log query for troubleshooting (remove in production)
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('Projects query:', JSON.stringify(query, null, 2));
     }
 
     const projects = await Project.find(query)
@@ -213,6 +222,8 @@ exports.updateProject = async (req, res) => {
         updateData.wellDetails = null;
       } else if (oldProjectType === 'mosque') {
         updateData.mosqueDetails = null;
+      } else if (oldProjectType === 'educational_center') {
+        updateData.educationalCenterDetails = null;
       } else if (oldProjectType === 'other') {
         updateData.otherDetails = null;
       }
