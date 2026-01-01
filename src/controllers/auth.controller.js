@@ -114,8 +114,13 @@ exports.forgotPassword = async (req, res) => {
 
     await user.save();
 
-    // Send email
-    await emailService.sendPasswordResetEmail(user, resetToken);
+    // Send email (non-blocking - continue even if email fails for security)
+    try {
+      await emailService.sendPasswordResetEmail(user, resetToken);
+    } catch (emailError) {
+      console.error('Failed to send password reset email:', emailError.message);
+      // Continue with request even if email fails (security best practice - don't reveal if email exists)
+    }
 
     return successResponse(res, 200, 'If email exists, password reset link has been sent');
   } catch (error) {
@@ -192,8 +197,13 @@ exports.clientSendOTP = async (req, res) => {
       expiresAt,
     });
 
-    // Send OTP email
-    await emailService.sendClientOTPEmail(normalizedEmail, otp, clientInfo?.name || 'Client');
+    // Send OTP email (non-blocking - continue even if email fails)
+    try {
+      await emailService.sendClientOTPEmail(normalizedEmail, otp, clientInfo?.name || 'Client');
+    } catch (emailError) {
+      console.error('Failed to send OTP email:', emailError.message);
+      // Continue with request even if email fails (OTP is saved in DB, user can contact support)
+    }
 
     return successResponse(res, 200, 'OTP has been sent to your email');
   } catch (error) {

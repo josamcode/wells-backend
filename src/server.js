@@ -1,10 +1,11 @@
-require('dotenv').config();
+// Load .env file from backend root directory (not from current working directory)
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '../.env') });
 const express = require('express');
 const cors = require('cors');
 const connectDB = require('./config/database');
 const routes = require('./routes');
 const fs = require('fs');
-const path = require('path');
 
 const app = express();
 const isProduction = process.env.NODE_ENV === 'production';
@@ -33,6 +34,7 @@ const allowedOrigins = [
   'https://wells-management.fly.dev',
   'http://localhost:3000',
   'http://localhost:3001',
+  "http://192.168.56.1:3000"
 ].filter(Boolean);
 
 app.use(cors({
@@ -98,6 +100,13 @@ if (!isProduction) {
     next();
   });
 }
+
+// ===========================================
+// STATIC FILES
+// ===========================================
+
+// Serve static files from public folder (for logo, etc.)
+app.use(express.static(path.join(__dirname, '../public')));
 
 // ===========================================
 // ROUTES

@@ -57,6 +57,15 @@ exports.createPayment = async (req, res) => {
       projectId
     );
 
+    // Send email notification to recipient
+    if (populatedPayment.recipient?.email) {
+      try {
+        await emailService.sendPaymentAddedEmail(populatedPayment, project, populatedPayment.recipient);
+      } catch (emailError) {
+        console.error('Failed to send payment request email:', emailError.message);
+      }
+    }
+
     return successResponse(res, 201, 'Payment request created successfully', populatedPayment);
   } catch (error) {
     return errorResponse(res, 500, 'Server error', error.message);
@@ -124,15 +133,17 @@ exports.getPaymentSummary = async (req, res) => {
       return sum + payment.amount;
     }, 0);
 
-    const budget = project.budget?.amount || 0;
-    const remaining = budget - totalSpent;
-    const spentPercentage = budget > 0 ? (totalSpent / budget) * 100 : 0;
+    // Only super admin can see budget information
+    const isSuperAdmin = req.user.role === ROLES.SUPER_ADMIN;
+    const budget = isSuperAdmin ? (project.budget?.amount || 0) : null;
+    const remaining = isSuperAdmin && budget ? (budget - totalSpent) : null;
+    const spentPercentage = isSuperAdmin && budget && budget > 0 ? (totalSpent / budget) * 100 : null;
 
     return successResponse(res, 200, 'Payment summary retrieved successfully', {
-      budget,
+      ...(isSuperAdmin && budget !== null ? { budget } : {}),
       totalSpent,
-      remaining,
-      spentPercentage: Math.round(spentPercentage * 100) / 100,
+      ...(isSuperAdmin && remaining !== null ? { remaining } : {}),
+      ...(isSuperAdmin && spentPercentage !== null ? { spentPercentage: Math.round(spentPercentage * 100) / 100 } : {}),
       currency: project.budget?.currency || 'USD',
       paymentsCount: payments.length,
     });
@@ -181,6 +192,15 @@ exports.approvePayment = async (req, res) => {
       populatedPayment.recipient.fullName,
       payment.project._id
     );
+
+    // Send email notification to requester
+    if (populatedPayment.requestedBy?.email) {
+      try {
+        await emailService.sendPaymentApprovedEmail(populatedPayment, payment.project, populatedPayment.requestedBy, populatedPayment.recipient);
+      } catch (emailError) {
+        console.error('Failed to send payment approval email:', emailError.message);
+      }
+    }
 
     return successResponse(res, 200, 'Payment approved successfully', populatedPayment);
   } catch (error) {
@@ -233,6 +253,15 @@ exports.rejectPayment = async (req, res) => {
       rejectionReason?.trim() || '',
       payment.project._id
     );
+
+    // Send email notification to requester
+    if (populatedPayment.requestedBy?.email) {
+      try {
+        await emailService.sendPaymentRejectedEmail(populatedPayment, payment.project, populatedPayment.requestedBy, populatedPayment.recipient, rejectionReason?.trim() || '');
+      } catch (emailError) {
+        console.error('Failed to send payment rejection email:', emailError.message);
+      }
+    }
 
     return successResponse(res, 200, 'Payment rejected successfully', populatedPayment);
   } catch (error) {

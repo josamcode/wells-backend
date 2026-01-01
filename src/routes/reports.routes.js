@@ -41,6 +41,8 @@ router.post(
     body('project').notEmpty().withMessage('Project is required'),
     body('title').trim().notEmpty().withMessage('Title is required'),
     body('workDate').isISO8601().withMessage('Work date is required'),
+    body('googleDriveUrl').notEmpty().withMessage('Google Drive URL is required').isURL().withMessage('Google Drive URL must be a valid URL'),
+    body('locationUrl').notEmpty().withMessage('Location URL is required').isURL().withMessage('Location URL must be a valid URL'),
     body('reportType').optional().isIn(['daily', 'weekly', 'monthly', 'milestone', 'final']),
     validate,
   ],
@@ -56,6 +58,8 @@ router.put(
   [
     body('title').optional().trim().notEmpty(),
     body('workDate').optional().isISO8601(),
+    body('googleDriveUrl').optional().isURL().withMessage('Google Drive URL must be a valid URL'),
+    body('locationUrl').optional().isURL().withMessage('Location URL must be a valid URL'),
     body('reportType').optional().isIn(['daily', 'weekly', 'monthly', 'milestone', 'final']),
     validate,
   ],

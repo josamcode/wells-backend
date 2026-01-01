@@ -230,6 +230,41 @@ exports.createReport = async (req, res) => {
 
     const report = await Report.create(reportData);
 
+    // Populate report for email notifications
+    const populatedReport = await Report.findById(report._id)
+      .populate('submittedBy', 'fullName email')
+      .populate('project');
+
+    // Notify project manager about new report (draft)
+    try {
+      if (populatedReport.project.projectManager) {
+        const projectManager = await User.findById(populatedReport.project.projectManager);
+        if (projectManager?.email) {
+          const emailHtml = await emailService.sendReportCreatedEmail(populatedReport, populatedReport.project, populatedReport.submittedBy);
+          await emailService.sendEmail(projectManager.email, `New Report Created - ${populatedReport.project.projectName}`, emailHtml);
+        }
+      }
+
+      // Also notify admins
+      const admins = await User.find({
+        role: { $in: [ROLES.SUPER_ADMIN, ROLES.ADMIN] },
+        isActive: true,
+      });
+
+      const emailHtml = await emailService.sendReportCreatedEmail(populatedReport, populatedReport.project, populatedReport.submittedBy);
+      for (const admin of admins) {
+        if (admin.email && admin._id.toString() !== req.user._id.toString()) {
+          try {
+            await emailService.sendEmail(admin.email, `New Report Created - ${populatedReport.project.projectName}`, emailHtml);
+          } catch (emailError) {
+            console.error(`Failed to send report created email to ${admin.email}:`, emailError.message);
+          }
+        }
+      }
+    } catch (emailError) {
+      console.error('Failed to send report created notifications:', emailError.message);
+    }
+
     return successResponse(res, 201, 'Report created successfully', report);
   } catch (error) {
     return errorResponse(res, 500, 'Server error', error.message);
@@ -255,6 +290,9 @@ exports.updateReport = async (req, res) => {
       }
     }
 
+    // Track old status for email notification
+    const oldStatus = report.status;
+
     // Update report
     Object.assign(report, req.body);
     await report.save();
@@ -262,6 +300,48 @@ exports.updateReport = async (req, res) => {
     const updatedReport = await Report.findById(report._id)
       .populate('project')
       .populate('submittedBy', 'fullName email');
+
+    // Send email notification if report was previously submitted and is being updated
+    // (Notify project manager and admins)
+    if (oldStatus === REPORT_STATUS.SUBMITTED || oldStatus === REPORT_STATUS.UNDER_REVIEW) {
+      try {
+        const recipients = [];
+
+        // Add project manager
+        if (updatedReport.project.projectManager) {
+          const projectManager = await User.findById(updatedReport.project.projectManager);
+          if (projectManager?.email) {
+            recipients.push(projectManager);
+          }
+        }
+
+        // Add admins
+        const admins = await User.find({
+          role: { $in: [ROLES.SUPER_ADMIN, ROLES.ADMIN] },
+          isActive: true,
+        });
+        recipients.push(...admins.filter(a => a.email));
+
+        // Remove duplicates and sender
+        const uniqueRecipients = Array.from(
+          new Map(recipients.map(r => [r._id.toString(), r])).values()
+        ).filter(r => r._id.toString() !== req.user._id.toString());
+
+        if (uniqueRecipients.length > 0) {
+          const emailHtml = await emailService.sendReportUpdatedEmail(updatedReport, updatedReport.project, updatedReport.submittedBy, req.user);
+
+          for (const recipient of uniqueRecipients) {
+            try {
+              await emailService.sendEmail(recipient.email, `Report Updated - ${updatedReport.project.projectName}`, emailHtml);
+            } catch (emailError) {
+              console.error(`Failed to send report updated email to ${recipient.email}:`, emailError.message);
+            }
+          }
+        }
+      } catch (emailError) {
+        console.error('Failed to send report updated notifications:', emailError.message);
+      }
+    }
 
     return successResponse(res, 200, 'Report updated successfully', updatedReport);
   } catch (error) {
@@ -277,13 +357,39 @@ exports.deleteReport = async (req, res) => {
       return errorResponse(res, 404, 'Report not found');
     }
 
-    // Only allow deleting draft reports or by admin
-    if (
-      req.user.role === ROLES.CONTRACTOR &&
-      (report.submittedBy.toString() !== req.user._id.toString() ||
-        report.status !== REPORT_STATUS.DRAFT)
-    ) {
-      return errorResponse(res, 403, 'Cannot delete this report');
+    // Super admin can delete any report
+    if (req.user.role === ROLES.SUPER_ADMIN) {
+      // Allow deletion - no restrictions
+    }
+    // Contractors can delete their own reports that are NOT approved
+    else if (req.user.role === ROLES.CONTRACTOR) {
+      // Check if contractor owns the report
+      if (report.submittedBy.toString() !== req.user._id.toString()) {
+        return errorResponse(res, 403, 'You can only delete your own reports');
+      }
+
+      // Check if report is approved (contractors cannot delete approved reports)
+      if (report.status === REPORT_STATUS.APPROVED) {
+        return errorResponse(res, 403, 'Cannot delete an approved report');
+      }
+    }
+    // Other roles (Admin, Project Manager) can delete reports they manage
+    else if ([ROLES.ADMIN, ROLES.PROJECT_MANAGER].includes(req.user.role)) {
+      // Admins and Project Managers can delete reports for projects they manage
+      const project = await Project.findById(report.project);
+      if (!project) {
+        return errorResponse(res, 404, 'Project not found');
+      }
+
+      // For Project Managers, check if they manage this project
+      if (req.user.role === ROLES.PROJECT_MANAGER &&
+        project.projectManager?.toString() !== req.user._id.toString()) {
+        return errorResponse(res, 403, 'You can only delete reports for projects you manage');
+      }
+    }
+    // Other roles cannot delete reports
+    else {
+      return errorResponse(res, 403, 'You do not have permission to delete reports');
     }
 
     // Delete attachments from Google Drive
@@ -325,6 +431,10 @@ exports.submitReport = async (req, res) => {
     report.submittedAt = new Date();
     await report.save();
 
+    // Populate submitter for email
+    const populatedReport = await Report.findById(report._id)
+      .populate('submittedBy', 'fullName email');
+
     // Notify project managers and admins
     const managers = await User.find({
       $or: [
@@ -341,6 +451,23 @@ exports.submitReport = async (req, res) => {
       report.title,
       report.project.projectName
     );
+
+    // Send email notifications to managers
+    try {
+      const emailHtml = await emailService.sendReportSubmittedEmail(populatedReport, report.project, populatedReport.submittedBy);
+
+      for (const manager of managers) {
+        if (manager.email) {
+          try {
+            await emailService.sendEmail(manager.email, `New Report Submitted - ${report.project.projectName}`, emailHtml);
+          } catch (emailError) {
+            console.error(`Failed to send report submitted email to ${manager.email}:`, emailError.message);
+          }
+        }
+      }
+    } catch (emailError) {
+      console.error('Failed to send report submission notifications:', emailError.message);
+    }
 
     return successResponse(res, 200, 'Report submitted successfully', report);
   } catch (error) {
@@ -374,7 +501,14 @@ exports.reviewReport = async (req, res) => {
         report.submittedBy._id,
         report.title
       );
-      await emailService.sendReportApprovedEmail(report, report.project, report.submittedBy);
+
+      // Send email notification (non-blocking - continue even if email fails)
+      try {
+        await emailService.sendReportApprovedEmail(report, report.project, report.submittedBy);
+      } catch (emailError) {
+        console.error('Failed to send report approval email:', emailError.message);
+        // Continue with request even if email fails
+      }
 
       // Update project progress if provided
       if (report.progressPercentage !== undefined) {
@@ -400,7 +534,14 @@ exports.reviewReport = async (req, res) => {
         report.title,
         rejectionReason
       );
-      await emailService.sendReportRejectedEmail(report, report.project, report.submittedBy, rejectionReason);
+
+      // Send email notification (non-blocking - continue even if email fails)
+      try {
+        await emailService.sendReportRejectedEmail(report, report.project, report.submittedBy, rejectionReason);
+      } catch (emailError) {
+        console.error('Failed to send report rejection email:', emailError.message);
+        // Continue with request even if email fails
+      }
     } else {
       return errorResponse(res, 400, 'Invalid action');
     }

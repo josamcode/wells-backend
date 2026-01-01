@@ -117,6 +117,11 @@ const reportSchema = new mongoose.Schema(
     attachments: [attachmentSchema],
     googleDriveUrl: {
       type: String,
+      required: [true, 'Google Drive URL is required'],
+    },
+    locationUrl: {
+      type: String,
+      required: [true, 'Location URL is required'],
     },
     weather: {
       condition: String,

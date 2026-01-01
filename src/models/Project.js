@@ -58,6 +58,16 @@ const projectSchema = new mongoose.Schema(
         default: 'USD',
       },
     },
+    cost: {
+      amount: {
+        type: Number,
+        min: 0,
+      },
+      currency: {
+        type: String,
+        default: 'USD',
+      },
+    },
     contractor: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',

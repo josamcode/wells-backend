@@ -19,17 +19,25 @@ exports.getProjects = async (req, res) => {
       projectManager,
       projectType,
       search,
-      isArchived = 'false',
+      isArchived,
     } = req.query;
     const { skip, limit: pageLimit } = paginate(page, limit);
 
     // Build query based on user role
     const query = {};
 
-    // For Super Admin and Admin, apply archive filter if specified
+    // Super Admin can see all projects (archived and non-archived) unless explicitly filtered
+    // For Admin and Viewer, apply archive filter (default to false if not specified)
     // For Project Managers and Contractors, show all their projects (archived and non-archived)
-    if (req.user.role === ROLES.SUPER_ADMIN || req.user.role === ROLES.ADMIN || req.user.role === ROLES.VIEWER) {
-      query.isArchived = isArchived === 'true';
+    if (req.user.role === ROLES.SUPER_ADMIN) {
+      // Super Admin sees all projects by default, but can filter by isArchived if specified
+      if (isArchived !== undefined && isArchived !== '') {
+        query.isArchived = isArchived === 'true';
+      }
+      // If isArchived is not specified, don't filter (show all projects including archived)
+    } else if (req.user.role === ROLES.ADMIN || req.user.role === ROLES.VIEWER) {
+      // Admin and Viewer see non-archived projects by default
+      query.isArchived = isArchived === 'true' ? true : false;
     }
     // Project Managers and Contractors see all their projects regardless of archive status
 
@@ -92,12 +100,23 @@ exports.getProjects = async (req, res) => {
       .populate('createdBy', 'fullName')
       .sort({ createdAt: -1 })
       .skip(skip)
-      .limit(pageLimit);
+      .limit(pageLimit)
+      .lean();
+
+    // Remove cost and budget fields for non-super-admin users
+    const sanitizedProjects = projects.map(project => {
+      const projectObj = { ...project };
+      if (req.user.role !== ROLES.SUPER_ADMIN) {
+        delete projectObj.cost;
+        delete projectObj.budget;
+      }
+      return projectObj;
+    });
 
     const total = await Project.countDocuments(query);
 
     return successResponse(res, 200, 'Projects retrieved successfully', {
-      projects,
+      projects: sanitizedProjects,
       pagination: {
         page: parseInt(page),
         limit: parseInt(limit),
@@ -145,7 +164,13 @@ exports.getProject = async (req, res) => {
       }
     }
 
-    return successResponse(res, 200, 'Project retrieved successfully', project);
+    // Convert to plain object and remove cost field for non-super-admin users
+    const projectObj = project.toObject();
+    if (req.user.role !== ROLES.SUPER_ADMIN) {
+      delete projectObj.cost;
+    }
+
+    return successResponse(res, 200, 'Project retrieved successfully', projectObj);
   } catch (error) {
     return errorResponse(res, 500, 'Server error', error.message);
   }
@@ -162,6 +187,12 @@ exports.createProject = async (req, res) => {
     // Remove projectNumber if it's empty (to trigger auto-generation)
     if (!projectData.projectNumber || projectData.projectNumber.trim() === '') {
       delete projectData.projectNumber;
+    }
+
+    // Only super admin can set cost and budget
+    if (req.user.role !== ROLES.SUPER_ADMIN) {
+      delete projectData.cost;
+      delete projectData.budget;
     }
 
     const project = await Project.create(projectData);
@@ -181,20 +212,68 @@ exports.createProject = async (req, res) => {
       console.error('Google Drive folder creation failed:', driveError);
     }
 
+    // Populate project for email notifications
+    const populatedProject = await Project.findById(project._id)
+      .populate('contractor', 'fullName email')
+      .populate('projectManager', 'fullName email')
+      .populate('createdBy', 'fullName email');
+
     // Notify contractor if assigned
-    if (project.contractor) {
-      const contractor = await User.findById(project.contractor);
-      if (contractor) {
-        await notificationService.notifyProjectAssignment(
-          project._id,
-          contractor._id,
-          project.projectName
-        );
-        await emailService.sendProjectAssignedEmail(project, contractor);
+    if (populatedProject.contractor) {
+      await notificationService.notifyProjectAssignment(
+        project._id,
+        populatedProject.contractor._id,
+        project.projectName
+      );
+
+      // Send email notification (non-blocking - continue even if email fails)
+      try {
+        await emailService.sendProjectAssignedEmail(populatedProject, populatedProject.contractor);
+      } catch (emailError) {
+        console.error('Failed to send project assignment email:', emailError.message);
       }
     }
 
-    return successResponse(res, 201, 'Project created successfully', project);
+    // Notify project manager if assigned
+    if (populatedProject.projectManager) {
+      try {
+        await emailService.sendProjectManagerAssignedEmail(populatedProject, populatedProject.projectManager);
+      } catch (emailError) {
+        console.error('Failed to send project manager assignment email:', emailError.message);
+      }
+    }
+
+    // Notify admins and project managers about new project
+    try {
+      const adminsAndManagers = await User.find({
+        role: { $in: [ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.PROJECT_MANAGER] },
+        isActive: true,
+      });
+
+      const emailHtml = await emailService.sendProjectCreatedEmail(populatedProject, populatedProject.createdBy);
+
+      // Send to all admins and managers
+      for (const admin of adminsAndManagers) {
+        if (admin.email && admin._id.toString() !== req.user._id.toString()) {
+          try {
+            await emailService.sendEmail(admin.email, `New Project Created - ${project.projectName}`, emailHtml);
+          } catch (emailError) {
+            console.error(`Failed to send project created email to ${admin.email}:`, emailError.message);
+          }
+        }
+      }
+    } catch (emailError) {
+      console.error('Failed to send project created notifications:', emailError.message);
+    }
+
+    // Convert to plain object and remove cost and budget fields for non-super-admin users
+    const projectObj = project.toObject();
+    if (req.user.role !== ROLES.SUPER_ADMIN) {
+      delete projectObj.cost;
+      delete projectObj.budget;
+    }
+
+    return successResponse(res, 201, 'Project created successfully', projectObj);
   } catch (error) {
     return errorResponse(res, 500, 'Server error', error.message);
   }
@@ -210,6 +289,10 @@ exports.updateProject = async (req, res) => {
 
     const oldContractor = project.contractor?.toString();
     const newContractor = req.body.contractor;
+    const oldProjectManager = project.projectManager?.toString();
+    const newProjectManager = req.body.projectManager;
+    const oldStatus = project.status;
+    const newStatus = req.body.status;
     const oldProjectType = project.projectType;
     const newProjectType = req.body.projectType;
 
@@ -233,6 +316,11 @@ exports.updateProject = async (req, res) => {
     Object.assign(project, updateData);
     await project.save();
 
+    // Populate project for email notifications
+    const populatedProject = await Project.findById(project._id)
+      .populate('contractor', 'fullName email')
+      .populate('projectManager', 'fullName email');
+
     // Notify if contractor changed
     if (newContractor && oldContractor !== newContractor) {
       const contractor = await User.findById(newContractor);
@@ -242,13 +330,53 @@ exports.updateProject = async (req, res) => {
           contractor._id,
           project.projectName
         );
-        await emailService.sendProjectAssignedEmail(project, contractor);
+
+        // Send email notification (non-blocking - continue even if email fails)
+        try {
+          await emailService.sendProjectAssignedEmail(populatedProject, contractor);
+        } catch (emailError) {
+          console.error('Failed to send project assignment email:', emailError.message);
+        }
+      }
+    }
+
+    // Notify if project manager changed
+    if (newProjectManager && oldProjectManager !== newProjectManager) {
+      const projectManager = await User.findById(newProjectManager);
+      if (projectManager) {
+        try {
+          await emailService.sendProjectManagerAssignedEmail(populatedProject, projectManager);
+        } catch (emailError) {
+          console.error('Failed to send project manager assignment email:', emailError.message);
+        }
+      }
+    }
+
+    // Notify if status changed
+    if (newStatus && oldStatus !== newStatus) {
+      const recipients = [];
+      if (populatedProject.contractor?.email) recipients.push(populatedProject.contractor);
+      if (populatedProject.projectManager?.email) recipients.push(populatedProject.projectManager);
+
+      for (const recipient of recipients) {
+        try {
+          await emailService.sendProjectStatusChangedEmail(populatedProject, oldStatus, newStatus, req.user);
+        } catch (emailError) {
+          console.error(`Failed to send status change email to ${recipient.email}:`, emailError.message);
+        }
       }
     }
 
     const updatedProject = await Project.findById(project._id)
       .populate('contractor', 'fullName email')
-      .populate('projectManager', 'fullName email');
+      .populate('projectManager', 'fullName email')
+      .lean();
+
+    // Remove cost and budget fields for non-super-admin users
+    if (req.user.role !== ROLES.SUPER_ADMIN) {
+      delete updatedProject.cost;
+      delete updatedProject.budget;
+    }
 
     return successResponse(res, 200, 'Project updated successfully', updatedProject);
   } catch (error) {
@@ -280,8 +408,33 @@ exports.toggleArchiveProject = async (req, res) => {
       return errorResponse(res, 404, 'Project not found');
     }
 
+    const wasArchived = project.isArchived;
     project.isArchived = !project.isArchived;
     await project.save();
+
+    // Populate project for email notifications
+    const populatedProject = await Project.findById(project._id)
+      .populate('contractor', 'fullName email')
+      .populate('projectManager', 'fullName email');
+
+    // Send archive/unarchive email
+    try {
+      const emailHtml = await emailService.sendProjectArchivedEmail(populatedProject, project.isArchived, req.user);
+
+      const recipients = [];
+      if (populatedProject.contractor?.email) recipients.push(populatedProject.contractor);
+      if (populatedProject.projectManager?.email) recipients.push(populatedProject.projectManager);
+
+      for (const recipient of recipients) {
+        try {
+          await emailService.sendEmail(recipient.email, `Project ${project.isArchived ? 'Archived' : 'Unarchived'} - ${project.projectName}`, emailHtml);
+        } catch (emailError) {
+          console.error(`Failed to send archive email to ${recipient.email}:`, emailError.message);
+        }
+      }
+    } catch (emailError) {
+      console.error('Failed to send project archive notifications:', emailError.message);
+    }
 
     return successResponse(
       res,
@@ -304,6 +457,7 @@ exports.updateProjectStatus = async (req, res) => {
       return errorResponse(res, 404, 'Project not found');
     }
 
+    const oldStatus = project.status;
     project.status = status;
     if (status === PROJECT_STATUS.COMPLETED) {
       project.actualEndDate = new Date();
@@ -311,6 +465,58 @@ exports.updateProjectStatus = async (req, res) => {
     }
 
     await project.save();
+
+    // Populate project for email notifications
+    const populatedProject = await Project.findById(project._id)
+      .populate('contractor', 'fullName email')
+      .populate('projectManager', 'fullName email');
+
+    // Send status change email
+    const recipients = [];
+    if (populatedProject.contractor?.email) recipients.push(populatedProject.contractor);
+    if (populatedProject.projectManager?.email) recipients.push(populatedProject.projectManager);
+
+    for (const recipient of recipients) {
+      try {
+        await emailService.sendProjectStatusChangedEmail(populatedProject, oldStatus, status, req.user);
+      } catch (emailError) {
+        console.error(`Failed to send status change email to ${recipient.email}:`, emailError.message);
+      }
+    }
+
+    // Send completion email if project is completed
+    if (status === PROJECT_STATUS.COMPLETED) {
+      try {
+        const emailHtml = await emailService.sendProjectCompletedEmail(populatedProject, req.user);
+
+        // Send to all stakeholders
+        const stakeholders = [
+          populatedProject.contractor,
+          populatedProject.projectManager,
+        ].filter(Boolean);
+
+        // Also notify admins
+        const admins = await User.find({
+          role: { $in: [ROLES.SUPER_ADMIN, ROLES.ADMIN] },
+          isActive: true,
+        });
+
+        const allRecipients = [...stakeholders, ...admins];
+        const uniqueRecipients = Array.from(new Map(allRecipients.map(r => [r._id.toString(), r])).values());
+
+        for (const recipient of uniqueRecipients) {
+          if (recipient.email) {
+            try {
+              await emailService.sendEmail(recipient.email, `Project Completed - ${project.projectName}`, emailHtml);
+            } catch (emailError) {
+              console.error(`Failed to send completion email to ${recipient.email}:`, emailError.message);
+            }
+          }
+        }
+      } catch (emailError) {
+        console.error('Failed to send project completion notifications:', emailError.message);
+      }
+    }
 
     return successResponse(res, 200, 'Project status updated successfully', project);
   } catch (error) {
@@ -399,9 +605,20 @@ exports.getProjectsList = async (req, res) => {
 
     const projects = await Project.find(query)
       .select('projectNumber projectName status country')
-      .sort({ projectNumber: -1 });
+      .sort({ projectNumber: -1 })
+      .lean();
 
-    return successResponse(res, 200, 'Projects list retrieved successfully', projects);
+    // Remove cost and budget fields for non-super-admin users
+    const sanitizedProjects = projects.map(project => {
+      const projectObj = { ...project };
+      if (req.user.role !== ROLES.SUPER_ADMIN) {
+        delete projectObj.cost;
+        delete projectObj.budget;
+      }
+      return projectObj;
+    });
+
+    return successResponse(res, 200, 'Projects list retrieved successfully', sanitizedProjects);
   } catch (error) {
     return errorResponse(res, 500, 'Server error', error.message);
   }
@@ -433,6 +650,19 @@ exports.reviewProject = async (req, res) => {
       .populate('contractor', 'fullName email')
       .populate('projectManager', 'fullName email')
       .populate('evaluation.evaluatedBy', 'fullName email');
+
+    // Send email notifications to contractor and project manager
+    const recipients = [];
+    if (updatedProject.contractor?.email) recipients.push(updatedProject.contractor);
+    if (updatedProject.projectManager?.email) recipients.push(updatedProject.projectManager);
+
+    for (const recipient of recipients) {
+      try {
+        await emailService.sendProjectReviewedEmail(updatedProject, req.user, recipient);
+      } catch (emailError) {
+        console.error(`Failed to send project reviewed email to ${recipient.email}:`, emailError.message);
+      }
+    }
 
     return successResponse(res, 200, 'Project reviewed successfully', updatedProject);
   } catch (error) {
@@ -599,6 +829,19 @@ exports.uploadContract = async (req, res) => {
       .populate('contract.uploadedBy', 'fullName email')
       .populate('contractor', 'fullName email')
       .populate('projectManager', 'fullName email');
+
+    // Send email notifications to contractor and project manager
+    const recipients = [];
+    if (updatedProject.contractor?.email) recipients.push(updatedProject.contractor);
+    if (updatedProject.projectManager?.email) recipients.push(updatedProject.projectManager);
+
+    for (const recipient of recipients) {
+      try {
+        await emailService.sendContractUploadedEmail(updatedProject, req.user, recipient);
+      } catch (emailError) {
+        console.error(`Failed to send contract uploaded email to ${recipient.email}:`, emailError.message);
+      }
+    }
 
     return successResponse(res, 200, 'Contract uploaded successfully', updatedProject);
   } catch (error) {

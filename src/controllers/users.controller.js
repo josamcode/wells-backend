@@ -114,9 +114,14 @@ exports.createUser = async (req, res) => {
 
     const user = await User.create(userData);
 
-    // Send welcome email only if password was auto-generated
+    // Send welcome email only if password was auto-generated (non-blocking - continue even if email fails)
     if (!password) {
-      await emailService.sendWelcomeEmail(user, userPassword);
+      try {
+        await emailService.sendWelcomeEmail(user, userPassword);
+      } catch (emailError) {
+        console.error('Failed to send welcome email:', emailError.message);
+        // Continue with request even if email fails
+      }
     }
 
     return successResponse(res, 201, 'User created successfully', sanitizeUser(user));
@@ -140,13 +145,28 @@ exports.updateUser = async (req, res) => {
       return errorResponse(res, 403, 'Cannot modify super admin');
     }
 
+    // Track changes for email notification
+    const oldRole = user.role;
+    const oldIsActive = user.isActive;
+    const changes = {};
+
     // Update fields
     if (fullName) user.fullName = fullName;
-    if (role) user.role = role;
+    if (role) {
+      user.role = role;
+      if (oldRole !== role) {
+        changes['Role'] = `${oldRole} → ${role}`;
+      }
+    }
     if (phone !== undefined) user.phone = phone;
     if (organization !== undefined) user.organization = organization;
     if (country !== undefined) user.country = country;
-    if (isActive !== undefined) user.isActive = isActive;
+    if (isActive !== undefined) {
+      user.isActive = isActive;
+      if (oldIsActive !== isActive) {
+        changes['Status'] = isActive ? 'Activated' : 'Deactivated';
+      }
+    }
 
     // Update password if provided
     if (password && password.trim() !== '') {
@@ -159,6 +179,19 @@ exports.updateUser = async (req, res) => {
     }
 
     await user.save();
+
+    // Send email notifications if important changes occurred
+    try {
+      if (oldIsActive !== undefined && oldIsActive !== user.isActive) {
+        // Status changed (activated/deactivated)
+        await emailService.sendUserStatusChangedEmail(user, user.isActive, req.user);
+      } else if (Object.keys(changes).length > 0) {
+        // Other changes (role, etc.)
+        await emailService.sendUserUpdatedEmail(user, req.user, changes);
+      }
+    } catch (emailError) {
+      console.error('Failed to send user update email:', emailError.message);
+    }
 
     return successResponse(res, 200, 'User updated successfully', sanitizeUser(user));
   } catch (error) {

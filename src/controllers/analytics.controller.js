@@ -15,9 +15,12 @@ exports.getDashboardAnalytics = async (req, res) => {
     let projectFilter = {};
     let reportFilter = {};
 
-    // For Super Admin, Admin, and Viewer, exclude archived projects by default
+    // Super Admin can see all projects (archived and non-archived)
+    // For Admin and Viewer, exclude archived projects by default
     // For Project Managers and Contractors, show all their projects (archived and non-archived)
-    if (userRole === ROLES.SUPER_ADMIN || userRole === ROLES.ADMIN || userRole === ROLES.VIEWER) {
+    if (userRole === ROLES.SUPER_ADMIN) {
+      // Super Admin sees all projects - don't filter by isArchived
+    } else if (userRole === ROLES.ADMIN || userRole === ROLES.VIEWER) {
       projectFilter.isArchived = false;
     }
 
@@ -50,8 +53,11 @@ exports.getDashboardAnalytics = async (req, res) => {
     } else if (userRole === ROLES.VIEWER) {
       // Viewer: Can see all projects and reports (read-only, non-archived only)
       // isArchived: false already set above
+    } else if (userRole === ROLES.SUPER_ADMIN) {
+      // Super Admin: Show all data (archived and non-archived)
+      // No isArchived filter applied
     } else {
-      // Super Admin and Admin: Show all data (non-archived only)
+      // Admin: Show all data (non-archived only)
       // isArchived: false already set above
     }
 
@@ -161,19 +167,26 @@ exports.getDashboardAnalytics = async (req, res) => {
       });
     }
 
-    // Total budget (sum of filtered projects)
-    const budgetAgg = await Project.aggregate([
-      { $match: projectFilter },
-      {
-        $group: {
-          _id: null,
-          total: { $sum: '$budget.amount' },
+    // Total budget (sum of filtered projects) - only for super admin
+    let budgetData = null;
+    if (userRole === ROLES.SUPER_ADMIN) {
+      const budgetAgg = await Project.aggregate([
+        { $match: projectFilter },
+        {
+          $group: {
+            _id: null,
+            total: { $sum: '$budget.amount' },
+          },
         },
-      },
-    ]);
-    const totalBudget = budgetAgg[0]?.total || 0;
+      ]);
+      const totalBudget = budgetAgg[0]?.total || 0;
+      budgetData = {
+        total: totalBudget,
+        currency: 'USD',
+      };
+    }
 
-    return successResponse(res, 200, 'Dashboard analytics retrieved successfully', {
+    const responseData = {
       projects: {
         total: totalProjects,
         completed: completedProjects,
@@ -186,16 +199,15 @@ exports.getDashboardAnalytics = async (req, res) => {
         pending: pendingReports,
         approved: approvedReports,
       },
-      budget: {
-        total: totalBudget,
-        currency: 'USD',
-      },
+      ...(budgetData ? { budget: budgetData } : {}),
       activeContractors,
       projectsByCountry,
       monthlyCompletions,
       recentProjects,
       recentReports,
-    });
+    };
+
+    return successResponse(res, 200, 'Dashboard analytics retrieved successfully', responseData);
   } catch (error) {
     return errorResponse(res, 500, 'Server error', error.message);
   }
