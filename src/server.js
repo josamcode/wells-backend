@@ -35,7 +35,7 @@ const allowedOrigins = [
   'http://localhost:3000',
   'http://localhost:3001',
   "http://192.168.56.1:3000",
-  "https://waterwellss.com"
+  "https://abbarms.com"
 ].filter(Boolean);
 
 app.use(cors({
