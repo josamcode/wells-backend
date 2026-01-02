@@ -34,7 +34,8 @@ const allowedOrigins = [
   'https://wells-management.fly.dev',
   'http://localhost:3000',
   'http://localhost:3001',
-  "http://192.168.56.1:3000"
+  "http://192.168.56.1:3000",
+  "https://waterwellss.com"
 ].filter(Boolean);
 
 app.use(cors({
