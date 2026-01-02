@@ -29,27 +29,41 @@ if (isProduction) {
 }
 
 // CORS Configuration - Specific origins, never use "*" in production
-const allowedOrigins = [
+// Production: Only allow the production frontend URL
+// Development: Allow localhost and other development URLs
+const productionOrigins = [
+  'https://abbarms.com',
+  'https://www.abbarms.com', // Include www subdomain if used
+];
+
+const developmentOrigins = [
   process.env.FRONTEND_URL || 'http://localhost:3000',
-  'https://wells-management.fly.dev',
   'http://localhost:3000',
   'http://localhost:3001',
-  "http://192.168.56.1:3000",
-  "https://abbarms.com"
+  'http://192.168.56.1:3000',
 ].filter(Boolean);
+
+// Use production origins in production, development origins otherwise
+const allowedOrigins = isProduction ? productionOrigins : developmentOrigins;
 
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow requests with no origin (mobile apps, curl, etc.)
-    if (!origin) return callback(null, true);
+    // Allow requests with no origin (mobile apps, curl, etc.) - but only in development
+    if (!origin) {
+      return isProduction
+        ? callback(new Error('Origin header required in production'))
+        : callback(null, true);
+    }
 
     if (allowedOrigins.includes(origin)) {
       callback(null, true);
     } else if (!isProduction) {
-      // Allow all origins in development
+      // Allow all origins in development for easier local testing
       callback(null, true);
     } else {
-      callback(new Error('Not allowed by CORS'));
+      // In production, strictly reject any origin not in the allowed list
+      console.warn(`CORS blocked request from origin: ${origin}`);
+      callback(new Error(`Not allowed by CORS. Allowed origins: ${allowedOrigins.join(', ')}`));
     }
   },
   credentials: true,
