@@ -281,10 +281,10 @@ exports.updateReport = async (req, res) => {
 
     // Check permissions
     if (req.user.role === ROLES.CONTRACTOR) {
-      // Contractors can only edit their own draft/rejected reports
+      // Contractors can only edit their own draft/rejected reports or reports with pending review status
       if (
         report.submittedBy.toString() !== req.user._id.toString() ||
-        ![REPORT_STATUS.DRAFT, REPORT_STATUS.REJECTED].includes(report.status)
+        ![REPORT_STATUS.DRAFT, REPORT_STATUS.REJECTED, REPORT_STATUS.SUBMITTED, REPORT_STATUS.UNDER_REVIEW].includes(report.status)
       ) {
         return errorResponse(res, 403, 'Cannot edit this report');
       }
@@ -302,47 +302,53 @@ exports.updateReport = async (req, res) => {
       .populate('submittedBy', 'fullName email');
 
     // Send email notification if report was previously submitted and is being updated
-    // (Notify project manager and admins)
+    // (Notify project manager and admins) - Non-blocking, runs in background
     if (oldStatus === REPORT_STATUS.SUBMITTED || oldStatus === REPORT_STATUS.UNDER_REVIEW) {
-      try {
-        const recipients = [];
+      // Use setImmediate to run email sending asynchronously without blocking the response
+      setImmediate(async () => {
+        try {
+          const recipients = [];
 
-        // Add project manager
-        if (updatedReport.project.projectManager) {
-          const projectManager = await User.findById(updatedReport.project.projectManager);
-          if (projectManager?.email) {
-            recipients.push(projectManager);
-          }
-        }
-
-        // Add admins
-        const admins = await User.find({
-          role: { $in: [ROLES.SUPER_ADMIN, ROLES.ADMIN] },
-          isActive: true,
-        });
-        recipients.push(...admins.filter(a => a.email));
-
-        // Remove duplicates and sender
-        const uniqueRecipients = Array.from(
-          new Map(recipients.map(r => [r._id.toString(), r])).values()
-        ).filter(r => r._id.toString() !== req.user._id.toString());
-
-        if (uniqueRecipients.length > 0) {
-          const emailHtml = await emailService.sendReportUpdatedEmail(updatedReport, updatedReport.project, updatedReport.submittedBy, req.user);
-
-          for (const recipient of uniqueRecipients) {
-            try {
-              await emailService.sendEmail(recipient.email, `Report Updated - ${updatedReport.project.projectName}`, emailHtml);
-            } catch (emailError) {
-              console.error(`Failed to send report updated email to ${recipient.email}:`, emailError.message);
+          // Add project manager
+          if (updatedReport.project.projectManager) {
+            const projectManager = await User.findById(updatedReport.project.projectManager);
+            if (projectManager?.email) {
+              recipients.push(projectManager);
             }
           }
+
+          // Add admins
+          const admins = await User.find({
+            role: { $in: [ROLES.SUPER_ADMIN, ROLES.ADMIN] },
+            isActive: true,
+          });
+          recipients.push(...admins.filter(a => a.email));
+
+          // Remove duplicates and sender
+          const uniqueRecipients = Array.from(
+            new Map(recipients.map(r => [r._id.toString(), r])).values()
+          ).filter(r => r._id.toString() !== req.user._id.toString());
+
+          if (uniqueRecipients.length > 0) {
+            const emailHtml = await emailService.sendReportUpdatedEmail(updatedReport, updatedReport.project, updatedReport.submittedBy, req.user);
+
+            // Send emails in parallel for better performance
+            await Promise.allSettled(
+              uniqueRecipients.map(recipient =>
+                emailService.sendEmail(recipient.email, `Report Updated - ${updatedReport.project.projectName}`, emailHtml)
+                  .catch(emailError => {
+                    console.error(`Failed to send report updated email to ${recipient.email}:`, emailError.message);
+                  })
+              )
+            );
+          }
+        } catch (emailError) {
+          console.error('Failed to send report updated notifications:', emailError.message);
         }
-      } catch (emailError) {
-        console.error('Failed to send report updated notifications:', emailError.message);
-      }
+      });
     }
 
+    // Return response immediately (emails are sent asynchronously in background)
     return successResponse(res, 200, 'Report updated successfully', updatedReport);
   } catch (error) {
     return errorResponse(res, 500, 'Server error', error.message);
