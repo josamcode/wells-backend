@@ -9,7 +9,8 @@
     "seed": "node src/utils/seed.js",
     "mock-data": "node src/utils/mockData.js",
     "mock-data:clear": "node src/utils/mockData.js --clear",
-    "cleanup-users": "node src/utils/mockData.js --cleanup-users"
+    "cleanup-users": "node src/utils/mockData.js --cleanup-users",
+    "check-email": "node check-email-delivery.js"
   },
   "keywords": [],
   "author": "",

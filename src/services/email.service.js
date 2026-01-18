@@ -136,17 +136,43 @@ class EmailService {
     }
 
     try {
+      // Ensure "From" address matches authenticated user for better deliverability
+      const fromAddress = process.env.EMAIL_FROM || process.env.EMAIL_USER;
+
       const mailOptions = {
-        from: process.env.EMAIL_FROM || process.env.EMAIL_USER,
+        from: fromAddress,
         to,
         subject,
         html,
         text: text || this.htmlToText(html),
+        // Add headers for better deliverability
+        headers: {
+          'X-Mailer': 'Wells Management System',
+          'X-Priority': '3',
+          'List-Unsubscribe': `<mailto:${process.env.EMAIL_USER}?subject=unsubscribe>`,
+        },
+        // Add reply-to if different from sender
+        replyTo: process.env.EMAIL_REPLY_TO || fromAddress,
       };
 
       const info = await this.transporter.sendMail(mailOptions);
       console.log('✅ Email sent successfully:', info.messageId);
-      return { success: true, messageId: info.messageId };
+      console.log('   From:', fromAddress);
+      console.log('   To:', to);
+      console.log('   Subject:', subject);
+      console.log('   Response:', info.response);
+
+      // Warn about potential delivery issues
+      if (to.includes('@gmail.com') || to.includes('@yahoo.com') || to.includes('@outlook.com')) {
+        console.log('⚠️  Note: If email doesn\'t arrive, check:');
+        console.log('   1. SPF record: Your domain needs "v=spf1 include:bluehost.com ~all"');
+        console.log('   2. DKIM: Enable DKIM signing in Bluehost email settings');
+        console.log('   3. DMARC: Add DMARC record for your domain');
+        console.log('   4. Check spam/junk folder');
+        console.log('   5. Check Gmail\'s "All Mail" folder (not just Inbox)');
+      }
+
+      return { success: true, messageId: info.messageId, response: info.response };
     } catch (error) {
       console.error('❌ Error sending email:', error.message);
 
